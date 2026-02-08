@@ -10,15 +10,19 @@ from state import WaveFieldState
 from source import WaveSourceGenerator
 from solver import FiniteDifferenceOperator, BoundaryConditions, WaveSolver
 from visualizer import WaveVisualizer
+from gif_exporter import GifExporter
 
 
-def run_simulation(config: SimulationConfig, wave_type: str) -> None:
+def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
     """
-    Run a single simulation with specified wave type.
+    Initialize simulation infrastructure.
 
     Args:
         config: Simulation configuration
         wave_type: 'P' for P-wave, 'S' for S-wave, 'Both' for both
+
+    Returns:
+        Tuple of (state, solver)
     """
     # Set the wave type in config
     config.wave_type = wave_type
@@ -51,13 +55,38 @@ def run_simulation(config: SimulationConfig, wave_type: str) -> None:
     # Initialize wave solver
     solver = WaveSolver(config, fd_operator, bc, source)
 
-    # Initialize visualizer and run simulation
-    visualizer = WaveVisualizer(config, state, solver, wave_type=wave_type)
-    visualizer.run()
+    return state, solver
 
 
-def main():
-    """Main entry point for elastic wave simulation."""
+def run_simulation(config: SimulationConfig, wave_type: str, export_gif: bool = False) -> None:
+    """
+    Run a single simulation with specified wave type.
+
+    Args:
+        config: Simulation configuration
+        wave_type: 'P' for P-wave, 'S' for S-wave, 'Both' for both
+        export_gif: If True, export to GIF; otherwise run visualization
+    """
+    state, solver = _initialize_simulation(config, wave_type)
+
+    if export_gif:
+        # Use GIF exporter
+        config.steps = config.gif_num_steps
+        exporter = GifExporter(config, state, solver)
+        exporter.run()
+    else:
+        # Initialize visualizer and run simulation
+        visualizer = WaveVisualizer(config, state, solver, wave_type=wave_type)
+        visualizer.run()
+
+
+def main(export_gif: bool = False):
+    """
+    Main entry point for elastic wave simulation.
+
+    Args:
+        export_gif: If True, export animations as GIF files instead of displaying real-time visualization
+    """
 
     # Initialize configuration with default parameters
     config = SimulationConfig()
@@ -66,16 +95,26 @@ def main():
     config.validate()
     config.print_info()
 
-    # Always run P-wave input (display can be switched with p/s/b keys)
-    # S-wave and combined modes arise from mode conversion
-    print("\n" + "=" * 60)
-    print("Running Elastic Wave Simulation (P-wave Input)")
-    print("Use keyboard shortcuts to switch display mode:")
-    print("  p: Show P-wave (X-displacement, compressional)")
-    print("  s: Show S-wave (Y-displacement, mode conversion)")
-    print("  b: Show both (combined magnitude)")
-    print("=" * 60)
-    run_simulation(config, "P")
+    if export_gif:
+        print("\n" + "=" * 60)
+        print("GIF Export Mode")
+        print(f"Steps: {config.gif_num_steps}")
+        print(f"Frame rate: {config.gif_frame_rate} fps")
+        print(f"Output directory: {config.gif_output_dir}")
+        print("Exporting animations: P-wave, S-wave, Combined magnitude")
+        print("=" * 60)
+    else:
+        # Always run P-wave input (display can be switched with p/s/b keys)
+        # S-wave and combined modes arise from mode conversion
+        print("\n" + "=" * 60)
+        print("Running Elastic Wave Simulation (P-wave Input)")
+        print("Use keyboard shortcuts to switch display mode:")
+        print("  p: Show P-wave (X-displacement, compressional)")
+        print("  s: Show S-wave (Y-displacement, mode conversion)")
+        print("  b: Show both (combined magnitude)")
+        print("=" * 60)
+
+    run_simulation(config, "P", export_gif=export_gif)
 
 
 if __name__ == "__main__":
