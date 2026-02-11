@@ -51,6 +51,13 @@ class SimulationConfig:
     # Numerical settings
     finite_diff_order: int = 4  # Finite difference order
 
+    # GIF export settings
+    gif_export: bool = False  # Enable GIF export mode
+    gif_num_steps: int = 560  # Number of simulation steps for GIF
+    gif_frame_rate: int = 10  # GIF frame rate (fps)
+    gif_output_dir: str = "./animation"  # Output directory for GIF files
+    gif_frame_interval: int = 2  # Visualization updates per solver step
+
     @property
     def lame_mu(self) -> float:
         """Lamé's first parameter (shear modulus)."""

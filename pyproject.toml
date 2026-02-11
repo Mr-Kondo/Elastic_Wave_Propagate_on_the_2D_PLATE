@@ -8,4 +8,6 @@ dependencies = [
 	"matplotlib",
 	"mlx",
 	"numpy",
+	"imageio",
+	"Pillow",
 ]
