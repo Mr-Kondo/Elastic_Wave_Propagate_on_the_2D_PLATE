@@ -165,6 +165,13 @@ Expected output includes grid dimensions, domain size, wave speeds, and waveleng
 
 ### References
 
+**Original Paper**:
+
+This implementation is based on the following bulletin paper:
+- Uenishi, K. (2009). "ON THE NUMERICAL ANALYSIS OF SOLID DYNAMICS USING THE MOVING PARTICLE SEMI-IMPLICIT (MPS) METHOD". *Research Report of the Research Center for Urban Safety and Security, Kobe University*, Vol. 13, pp. 11-20. DOI: [10.24546/81001946](https://doi.org/10.24546/81001946)
+
+**Validation References**:
+
 This implementation is validated against standard elasticity theory:
 - Navier-Cauchy equations: Landau & Lifshitz, "Theory of Elasticity"
 - Wave propagation: Aki & Richards, "Quantitative Seismology" 
