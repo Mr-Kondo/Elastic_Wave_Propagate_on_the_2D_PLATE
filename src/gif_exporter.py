@@ -128,8 +128,6 @@ class GifExporter:
         Returns:
             Tuple of (p_wave_field, s_wave_field, combined_field) as numpy arrays
         """
-        # Evaluate MLX arrays
-
         # Get fields as numpy arrays
         u_np = np.array(self.state.u[0, :, :, 0])  # X-displacement
         v_np = np.array(self.state.v[0, :, :, 0])  # Y-displacement

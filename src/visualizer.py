@@ -126,8 +126,6 @@ class WaveVisualizer:
 
             self.current_step += 1
 
-        # Evaluate MLX arrays
-
         # Get display field based on wave type
         disp_field = self.state.get_display_field()
         disp_np = np.array(disp_field[0, :, :, 0])
@@ -190,7 +188,7 @@ class WaveVisualizer:
     def _on_key(self, event):
         """
         Keyboard event handler - switches display mode only (not input wave).
-        Input is always P-wave; S-wave and combined modes are from mode conversion.
+        Source is unchanged; keys select displacement components.
 
         Args:
             event: Keyboard event

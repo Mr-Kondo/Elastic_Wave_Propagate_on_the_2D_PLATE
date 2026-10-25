@@ -136,7 +136,7 @@ class BoundaryConditions:
         self.source_edge_s_u = np.array(np.zeros_like(edge_source_mask)[None, :, :, None])
         self.source_edge_s_v = np.array(edge_source_mask[None, :, :, None])
 
-    def apply_fixed_boundaries(self, u: np.array, v: np.array):
+    def apply_fixed_boundaries(self, u: np.ndarray, v: np.ndarray):
         """
         Apply fixed (zero displacement) boundary conditions.
 
@@ -149,7 +149,7 @@ class BoundaryConditions:
         """
         return u * self.mask_field, v * self.mask_field
 
-    def apply_driven_left_boundary(self, u: np.array, v: np.array, amplitude: float, wave_type: str):
+    def apply_driven_left_boundary(self, u: np.ndarray, v: np.ndarray, amplitude: float, wave_type: str):
         """
         Apply driven (prescribed displacement) boundary condition at left edge.
 
@@ -171,7 +171,7 @@ class BoundaryConditions:
         v_edge = zero if wave_type == "P" else drive
         return np.concatenate((u_edge, u[:, :, 1:, :]), axis=2), np.concatenate((v_edge, v[:, :, 1:, :]), axis=2)
 
-    def apply_source(self, u: np.array, v: np.array, amplitude: float, wave_type: str, input_mode: str = "radial"):
+    def apply_source(self, u: np.ndarray, v: np.ndarray, amplitude: float, wave_type: str, input_mode: str = "radial"):
         """
         Inject source into displacement field with physically correct polarization.
 

@@ -100,7 +100,7 @@ def main(export_gif: bool = False):
         print("=" * 60)
     else:
         # Always run P-wave input (display can be switched with p/s/b keys)
-        # S-wave and combined modes arise from mode conversion
+        # Display keys select displacement components, independently of the source.
         print("\n" + "=" * 60)
         print("Running Elastic Wave Simulation (P-wave Input)")
         print("Use keyboard shortcuts to switch display mode:")

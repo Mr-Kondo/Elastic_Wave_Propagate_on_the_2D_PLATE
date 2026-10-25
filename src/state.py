@@ -30,7 +30,7 @@ class WaveFieldState:
         self.v_prev = np.zeros((1, ny, nx, 1))
 
         # Wave type selection - ALWAYS P-wave input (for source injection)
-        # S-wave and combined modes arise from mode conversion
+        # Display selection does not decompose the field into wave modes.
         self.wave_type: WaveType = "P"
 
         # Display mode - controls what field is visualized (independent of input)
