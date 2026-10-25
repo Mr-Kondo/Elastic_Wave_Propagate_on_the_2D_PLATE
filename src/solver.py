@@ -45,7 +45,7 @@ class FiniteDifferenceOperator:
         self.ny = None
         self.nx = None
 
-    def compute_derivatives(self, u: mx.array, v: mx.array):
+    def compute_derivatives(self, u: mx.array, v: mx.array, bc=None):
         """
         Compute all spatial derivatives needed for wave equation.
 
@@ -57,13 +57,14 @@ class FiniteDifferenceOperator:
             Tuple of (uxx, uyy, uxy, vxx, vyy, vxy)
         """
         # Store grid dimensions from input
-        if self.ny is None or self.nx is None:
-            self.ny = u.shape[1]
-            self.nx = u.shape[2]
+        self.ny, self.nx = u.shape[1:3]
 
         # Pad for 4th-order stencils (2 points on each side)
-        pad_u = mx.pad(u, ((0, 0), (2, 2), (2, 2), (0, 0)))
-        pad_v = mx.pad(v, ((0, 0), (2, 2), (2, 2), (0, 0)))
+        if bc is None:
+            pad_u = mx.pad(u, ((0, 0), (2, 2), (2, 2), (0, 0)))
+            pad_v = mx.pad(v, ((0, 0), (2, 2), (2, 2), (0, 0)))
+        else:
+            pad_u, pad_v = bc.pad_fields(u, v)
 
         # Compute derivatives via convolution
         uxx = self._center_crop(mx.conv2d(pad_u, self.k_xx))
@@ -123,6 +124,8 @@ class BoundaryConditions:
         self.source_mode = source_mode
         self.config = config
         self.fd_operator = fd_operator
+        if boundary_type != "fixed" and config is None:
+            raise ValueError("Free boundaries require a SimulationConfig")
 
         # Fixed wall boundary mask (Dirichlet: u=0, v=0 at boundaries)
         mask_field = np.ones((1, ny, nx, 1), dtype=np.float32)
@@ -136,12 +139,12 @@ class BoundaryConditions:
         self.mask_field = mx.array(mask_field)
 
         # Compute source center position
-        source_x_center = (source_x_start + source_x_end) / 2.0
-        source_y_center = ny / 2.0
+        source_x_center = (source_x_start + source_x_end - 1) / 2.0
+        source_y_center = (ny - 1) / 2.0
 
         # Create coordinate grids centered at source
-        x_coords = np.arange(nx) - source_x_center
-        y_coords = np.arange(ny) - source_y_center
+        x_coords = (np.arange(nx) - source_x_center) * (config.dx if config else 1)
+        y_coords = (np.arange(ny) - source_y_center) * (config.dy if config else 1)
         X, Y = np.meshgrid(x_coords, y_coords)
 
         # Compute radial distance and angle from source
@@ -155,7 +158,7 @@ class BoundaryConditions:
         # Unit tangential direction (for S wave): (-sin θ, cos θ)
         # This is perpendicular to radial direction
 
-        # Create source masks (Gaussian profile around source)
+        # Restrict the polarization field to the source columns
         source_mask = np.zeros((ny, nx), dtype=np.float32)
         source_mask[:, source_x_start:source_x_end] = 1.0
 
@@ -191,212 +194,56 @@ class BoundaryConditions:
         """
         return u * self.mask_field, v * self.mask_field
 
-    def apply_free_surface_top(self, u: mx.array, v: mx.array) -> tuple[mx.array, mx.array]:
+    @staticmethod
+    def _gradient(field, spacing, axis):
+        field = mx.swapaxes(field, axis, 0)
+        result = mx.concatenate((
+            (field[1:2] - field[:1]) / spacing,
+            (field[2:] - field[:-2]) / (2 * spacing),
+            (field[-1:] - field[-2:-1]) / spacing,
+        ), axis=0)
+        return mx.swapaxes(result, 0, axis)
+
+    @staticmethod
+    def _extend(field, gradient, spacing, axis, lower, upper):
+        field = mx.swapaxes(field, axis, 0)
+        gradient = mx.swapaxes(gradient, axis, 0)
+        low = mx.concatenate([field[k:k+1] - 2*k*spacing*gradient[:1] for k in (2, 1)])
+        high = mx.concatenate([field[-k-1:-k] + 2*k*spacing*gradient[-1:] for k in (1, 2)])
+        return mx.swapaxes(mx.concatenate((
+            low if lower else mx.concatenate([2*field[:1] - field[k:k+1] for k in (2, 1)]), field,
+            high if upper else mx.concatenate([2*field[-1:] - field[-k-1:-k] for k in (1, 2)]),
+        )), 0, axis)
+
+    def pad_fields(self, u, v):
+        """Exterior ghost nodes enforce zero normal and shear traction.
+
+        shortcut: second-order boundary closure and sequential corner extension;
+        use an energy-stable closure for quantitative surface-wave studies.
         """
-        Apply stress-free boundary condition at top surface (Rayleigh wave support).
-        Uses mirror boundary: stress must be zero at surface.
-        This approximates σ_zz = 0 and σ_zx = 0 at the top boundary.
-
-        Args:
-            u: X-displacement field
-            v: Y-displacement field
-
-        Returns:
-            Tuple of (u, v) with free surface condition applied
-        """
-        if self.boundary_type != "free_top":
-            return u, v
-
-        # Apply symmetric extension for stress-free boundary
-        # σ_yy = 0 requires ∂v/∂y = 0 (symmetric for v)
-        # σ_xy = 0 requires ∂u/∂y = 0 (symmetric for u)
-        # Mirror the displacement symmetrically across the boundary
-        bw = self.boundary_width
-        u_np = np.array(u[0, :, :, 0])
-        v_np = np.array(v[0, :, :, 0])
-
-        for i in range(bw):
-            # Top boundary: symmetric mirror for both components
-            # This creates ∂u/∂y = 0 and ∂v/∂y = 0 at the boundary
-            # Mirror index: ghost point at -(i+1) mirrors interior point at -(2*bw-i)
-            mirror_idx = -(2 * bw - i)
-            if mirror_idx < 0 and mirror_idx >= -v_np.shape[0]:
-                v_np[-(i + 1), :] = v_np[mirror_idx, :]
-                u_np[-(i + 1), :] = u_np[mirror_idx, :]
-            else:
-                # Fallback for edge cases: use nearest valid point
-                v_np[-(i + 1), :] = v_np[-(bw + 1), :]
-                u_np[-(i + 1), :] = u_np[-(bw + 1), :]
-
-        u = mx.array(u_np[None, :, :, None])
-        v = mx.array(v_np[None, :, :, None])
-
-        return u, v
-
-    def apply_stress_free_all(self, u: mx.array, v: mx.array) -> tuple[mx.array, mx.array]:
-        """
-        Apply stress-free (Neumann) boundary conditions on all 4 sides.
-        Enforces σ = 0 (zero stress) at boundaries using explicit ghost point calculation.
-
-        Stress tensor in 2D:
-            σ_xx = λ(u_x + v_y) + 2μ u_x
-            σ_yy = λ(u_x + v_y) + 2μ v_y
-            σ_xy = μ(u_y + v_x)
-
-        For stress-free boundaries (σ = 0):
-            σ_yy = 0: v_y = -λ(u_x+v_y)/(λ+2μ) = -λu_x/(λ+2μ) when v_y is eliminated
-            σ_xy = 0: u_y = -v_x
-
-        Ghost point calculation uses Taylor expansion:
-            φ_ghost = φ_interior - 2*Δ*∂φ/∂n
-
-        Args:
-            u: X-displacement field [1, ny, nx, 1]
-            v: Y-displacement field [1, ny, nx, 1]
-
-        Returns:
-            Tuple of (u, v) with stress-free conditions enforced
-        """
-        if self.boundary_type != "stress_free_all":
-            return u, v
-
-        bw = self.boundary_width
-        u_np = np.array(u[0, :, :, 0])
-        v_np = np.array(v[0, :, :, 0])
-
-        ny, nx = u_np.shape
-        dx = self.config.dx
-        dy = self.config.dy
-
-        # Lamé parameters
-        lam = self.config.lame_lambda
-        mu = self.config.lame_mu
-
-        # === TOP BOUNDARY (rows ny-bw to ny-1): σ_yy = 0, σ_xy = 0 ===
-        interior_row = ny - bw - 1
-        for i in range(1, bw + 1):
-            ghost_row = ny - i
-
-            if interior_row >= 0 and ghost_row < ny and ghost_row > interior_row:
-                # Compute u_x at interior row using central differences
-                u_x = np.zeros(nx)
-                u_x[1:-1] = (u_np[interior_row, 2:] - u_np[interior_row, :-2]) / (2 * dx)
-                u_x[0] = (u_np[interior_row, 1] - u_np[interior_row, 0]) / dx
-                u_x[-1] = (u_np[interior_row, -1] - u_np[interior_row, -2]) / dx
-
-                # Compute v_x at interior row
-                v_x = np.zeros(nx)
-                v_x[1:-1] = (v_np[interior_row, 2:] - v_np[interior_row, :-2]) / (2 * dx)
-                v_x[0] = (v_np[interior_row, 1] - v_np[interior_row, 0]) / dx
-                v_x[-1] = (v_np[interior_row, -1] - v_np[interior_row, -2]) / dx
-
-                # From σ_yy = 0: v_y = -λ u_x / (λ + 2μ)
-                # From σ_xy = 0: u_y = -v_x
-                alpha = lam / (lam + 2 * mu)
-
-                v_np[ghost_row, :] = v_np[interior_row, :] - 2 * dy * (-alpha * u_x)
-                u_np[ghost_row, :] = u_np[interior_row, :] - 2 * dy * (-v_x)
-
-        # === BOTTOM BOUNDARY (rows 0 to bw-1): σ_yy = 0, σ_xy = 0 ===
-        interior_row = bw
-        for i in range(1, bw + 1):
-            ghost_row = bw - i
-
-            if interior_row < ny and ghost_row >= 0 and ghost_row < interior_row:
-                # Compute u_x at interior row
-                u_x = np.zeros(nx)
-                u_x[1:-1] = (u_np[interior_row, 2:] - u_np[interior_row, :-2]) / (2 * dx)
-                u_x[0] = (u_np[interior_row, 1] - u_np[interior_row, 0]) / dx
-                u_x[-1] = (u_np[interior_row, -1] - u_np[interior_row, -2]) / dx
-
-                # Compute v_x at interior row
-                v_x = np.zeros(nx)
-                v_x[1:-1] = (v_np[interior_row, 2:] - v_np[interior_row, :-2]) / (2 * dx)
-                v_x[0] = (v_np[interior_row, 1] - v_np[interior_row, 0]) / dx
-                v_x[-1] = (v_np[interior_row, -1] - v_np[interior_row, -2]) / dx
-
-                # Bottom boundary: normal points downward, so flip sign
-                alpha = lam / (lam + 2 * mu)
-
-                v_np[ghost_row, :] = v_np[interior_row, :] + 2 * dy * (-alpha * u_x)
-                u_np[ghost_row, :] = u_np[interior_row, :] + 2 * dy * (-v_x)
-
-        # === RIGHT BOUNDARY (cols nx-bw to nx-1): σ_xx = 0, σ_xy = 0 ===
-        interior_col = nx - bw - 1
-        for i in range(1, bw + 1):
-            ghost_col = nx - i
-
-            if interior_col >= 0 and ghost_col < nx and ghost_col > interior_col:
-                # Compute v_y at interior column
-                v_y = np.zeros(ny)
-                v_y[1:-1] = (v_np[2:, interior_col] - v_np[:-2, interior_col]) / (2 * dy)
-                v_y[0] = (v_np[1, interior_col] - v_np[0, interior_col]) / dy
-                v_y[-1] = (v_np[-1, interior_col] - v_np[-2, interior_col]) / dy
-
-                # Compute u_y at interior column
-                u_y = np.zeros(ny)
-                u_y[1:-1] = (u_np[2:, interior_col] - u_np[:-2, interior_col]) / (2 * dy)
-                u_y[0] = (u_np[1, interior_col] - u_np[0, interior_col]) / dy
-                u_y[-1] = (u_np[-1, interior_col] - u_np[-2, interior_col]) / dy
-
-                # From σ_xx = 0: u_x = -λ v_y / (λ + 2μ)
-                # From σ_xy = 0: v_x = -u_y
-                alpha = lam / (lam + 2 * mu)
-
-                u_np[:, ghost_col] = u_np[:, interior_col] - 2 * dx * (-alpha * v_y)
-                v_np[:, ghost_col] = v_np[:, interior_col] - 2 * dx * (-u_y)
-
-        # === LEFT BOUNDARY (cols 0 to bw-1): σ_xx = 0, σ_xy = 0 ===
-        # Skip if using boundary source mode
-        if self.source_mode != "boundary":
-            interior_col = bw
-            for i in range(1, bw + 1):
-                ghost_col = bw - i
-
-                if interior_col < nx and ghost_col >= 0 and ghost_col < interior_col:
-                    # Compute v_y at interior column
-                    v_y = np.zeros(ny)
-                    v_y[1:-1] = (v_np[2:, interior_col] - v_np[:-2, interior_col]) / (2 * dy)
-                    v_y[0] = (v_np[1, interior_col] - v_np[0, interior_col]) / dy
-                    v_y[-1] = (v_np[-1, interior_col] - v_np[-2, interior_col]) / dy
-
-                    # Compute u_y at interior column
-                    u_y = np.zeros(ny)
-                    u_y[1:-1] = (u_np[2:, interior_col] - u_np[:-2, interior_col]) / (2 * dy)
-                    u_y[0] = (u_np[1, interior_col] - u_np[0, interior_col]) / dy
-                    u_y[-1] = (u_np[-1, interior_col] - u_np[-2, interior_col]) / dy
-
-                    # Left boundary: normal points leftward, so flip sign
-                    alpha = lam / (lam + 2 * mu)
-
-                    u_np[:, ghost_col] = u_np[:, interior_col] + 2 * dx * (-alpha * v_y)
-                    v_np[:, ghost_col] = v_np[:, interior_col] + 2 * dx * (-u_y)
-
-        u = mx.array(u_np[None, :, :, None])
-        v = mx.array(v_np[None, :, :, None])
-
-        return u, v
-
-    def apply_stress_free_explicit(self, u: mx.array, v: mx.array) -> tuple[mx.array, mx.array]:
-        """
-        Apply explicit stress-free boundary conditions (alias for apply_stress_free_all).
-        This method delegates to apply_stress_free_all which enforces σ = 0 at all boundaries.
-
-        Args:
-            u: X-displacement field
-            v: Y-displacement field
-
-        Returns:
-            Tuple of (u, v) with stress-free conditions enforced
-        """
-        return self.apply_stress_free_all(u, v)
+        u, v = u[0, :, :, 0], v[0, :, :, 0]
+        if self.boundary_type == "fixed":
+            for axis in (0, 1):
+                u = self._extend(u, mx.zeros_like(u), 1, axis, False, False)
+                v = self._extend(v, mx.zeros_like(v), 1, axis, False, False)
+            return u[None, :, :, None], v[None, :, :, None]
+        dx, dy = self.config.dx, self.config.dy
+        alpha = self.config.lame_lambda / (self.config.lame_lambda + 2*self.config.lame_mu)
+        all_free = self.boundary_type == "stress_free_all"
+        u_x, v_x = self._gradient(u, dx, 1), self._gradient(v, dx, 1)
+        u = self._extend(u, -v_x, dy, 0, all_free, True)
+        v = self._extend(v, -alpha*u_x, dy, 0, all_free, True)
+        u_y, v_y = self._gradient(u, dy, 0), self._gradient(v, dy, 0)
+        u = self._extend(u, -alpha*v_y, dx, 1, all_free and self.source_mode != "boundary", all_free)
+        v = self._extend(v, -u_y, dx, 1, all_free and self.source_mode != "boundary", all_free)
+        return u[None, :, :, None], v[None, :, :, None]
 
     def apply_driven_left_boundary(self, u: mx.array, v: mx.array, amplitude: float, wave_type: str):
         """
         Apply driven (prescribed displacement) boundary condition at left edge.
 
-        Drives the entire left boundary (all y heights) to generate complete
-        P-wave input and enable Head Wave generation at stress-free boundaries.
+        Prescribes the entire left boundary, including its endpoints.
+        Polarization alone does not validate a propagated wave mode.
 
         Args:
             u: X-displacement field
@@ -407,30 +254,11 @@ class BoundaryConditions:
         Returns:
             Tuple of (u, v) with driven boundary applied to full height
         """
-        u_np = np.array(u[0, :, :, 0])
-        v_np = np.array(v[0, :, :, 0])
-
-        # Drive entire left boundary (all heights) to generate Head Waves
-        # Full height input at left boundary enables complete stress-free
-        # boundary interactions at top/bottom, producing von Schmidt Head Waves
-
-        if wave_type == "P":
-            # P wave: x-direction displacement (compressional)
-            u_np[:, 0] = amplitude  # All heights
-            v_np[:, 0] = 0.0
-        elif wave_type == "S":
-            # S wave: y-direction displacement (shear)
-            u_np[:, 0] = 0.0
-            v_np[:, 0] = amplitude  # All heights
-        else:  # Both
-            # Combined P and S waves
-            u_np[:, 0] = amplitude  # P-wave component
-            v_np[:, 0] = amplitude  # S-wave component
-
-        u = mx.array(u_np[None, :, :, None])
-        v = mx.array(v_np[None, :, :, None])
-
-        return u, v
+        zero = mx.zeros_like(u[:, :, :1, :])
+        drive = zero + amplitude
+        u_edge = zero if wave_type == "S" else drive
+        v_edge = zero if wave_type == "P" else drive
+        return mx.concatenate((u_edge, u[:, :, 1:, :]), axis=2), mx.concatenate((v_edge, v[:, :, 1:, :]), axis=2)
 
     def apply_source(self, u: mx.array, v: mx.array, amplitude: float, wave_type: str, input_mode: str = "radial"):
         """
@@ -506,133 +334,56 @@ class WaveSolver:
             bc: Boundary conditions
             source: Wave source generator
         """
+        config.validate()
         self.config = config
         self.fd = fd_operator
         self.bc = bc
         self.source = source
 
     def step(self, state: WaveFieldState, t: float) -> None:
-        """
-        Advance simulation by one time step.
-
-        Args:
-            state: Current wave field state
-            t: Current simulation time (seconds)
-        """
-        # Choose integration method
+        """Advance from time t to t + dt; retain state on convergence failure."""
         if self.config.time_integration == "implicit":
-            self._step_implicit(state, t)
+            u_next, v_next = self._step_implicit(state, t)
         else:
-            self._step_explicit(state, t)
-
-    def _step_explicit(self, state: WaveFieldState, t: float) -> None:
-        """Explicit time integration (leap-frog)."""
-        # Compute spatial derivatives
-        uxx, uyy, uxy, vxx, vyy, vxy = self.fd.compute_derivatives(state.u, state.v)
-
-        # Compute accelerations from Navier-Cauchy equations
-        acc_u = self._compute_acceleration_u(uxx, uyy, vxy)
-        acc_v = self._compute_acceleration_v(vxx, vyy, uxy)
-
-        # Time integration (leap-frog/Verlet scheme)
-        u_next, v_next = self._time_integrate_explicit(state.u, state.v, state.u_prev, state.v_prev, acc_u, acc_v)
-
-        # Apply damping
-        u_next = u_next * self.config.damping
-        v_next = v_next * self.config.damping
-
-        # Apply boundary conditions
-        if self.config.boundary_type == "stress_free_all":
-            u_next, v_next = self.bc.apply_stress_free_explicit(u_next, v_next)
-        else:
-            u_next, v_next = self.bc.apply_fixed_boundaries(u_next, v_next)
-            u_next, v_next = self.bc.apply_free_surface_top(u_next, v_next)
-
-        # Apply wave source (always P-wave input)
-        source_amplitude = self.source.get_amplitude(t)
-        if self.config.source_mode == "boundary":
-            # Driven boundary: prescribe displacement at left edge
-            u_next, v_next = self.bc.apply_driven_left_boundary(u_next, v_next, source_amplitude, "P")
-        else:
-            # Interior source: inject at internal grid points
-            u_next, v_next = self.bc.apply_source(u_next, v_next, source_amplitude, "P", self.config.input_mode)
-
-        # Update state
+            acc_u, acc_v = self._accelerations(state.u, state.v)
+            u_next, v_next = self._time_integrate_explicit(
+                state.u, state.v, state.u_prev, state.v_prev, acc_u, acc_v)
+            u_next, v_next = self._apply_constraints(u_next, v_next, t)
         state.advance(u_next, v_next)
 
-    def _step_implicit(self, state: WaveFieldState, t: float) -> None:
-        """
-        Semi-implicit time integration with iterative solver.
+    def _accelerations(self, u, v):
+        uxx, uyy, uxy, vxx, vyy, vxy = self.fd.compute_derivatives(u, v, self.bc)
+        return self._compute_acceleration_u(uxx, uyy, vxy), self._compute_acceleration_v(vxx, vyy, uxy)
 
-        Uses fixed-point iteration with convergence check to solve:
-        u^{n+1} = 2u^n - u^{n-1} + dt^2 * acc(u^{n+1}, v^{n+1})
-        """
-        dt = self.config.dt
-
-        # Initial guess: use explicit step as predictor
-        uxx, uyy, uxy, vxx, vyy, vxy = self.fd.compute_derivatives(state.u, state.v)
-        acc_u = self._compute_acceleration_u(uxx, uyy, vxy)
-        acc_v = self._compute_acceleration_v(vxx, vyy, uxy)
-
-        u_next = 2 * state.u - state.u_prev + (dt**2) * acc_u
-        v_next = 2 * state.v - state.v_prev + (dt**2) * acc_v
-
-        # Fixed-point iterations (corrector) with convergence check
-        for iteration in range(self.config.implicit_iterations):
-            u_prev_iter = u_next
-            v_prev_iter = v_next
-
-            # Compute acceleration at predicted next state
-            uxx, uyy, uxy, vxx, vyy, vxy = self.fd.compute_derivatives(u_next, v_next)
-            acc_u_next = self._compute_acceleration_u(uxx, uyy, vxy)
-            acc_v_next = self._compute_acceleration_v(vxx, vyy, uxy)
-
-            # Average accelerations (Crank-Nicolson style)
-            acc_u_avg = 0.5 * (acc_u + acc_u_next)
-            acc_v_avg = 0.5 * (acc_v + acc_v_next)
-
-            # Update prediction
-            u_next = 2 * state.u - state.u_prev + (dt**2) * acc_u_avg
-            v_next = 2 * state.v - state.v_prev + (dt**2) * acc_v_avg
-
-            # Check convergence
-            u_diff = mx.abs(u_next - u_prev_iter)
-            v_diff = mx.abs(v_next - v_prev_iter)
-            u_scale = mx.abs(u_next) + 1e-12  # Avoid division by zero
-            v_scale = mx.abs(v_next) + 1e-12
-
-            relative_change_u = mx.max(u_diff / u_scale).item()
-            relative_change_v = mx.max(v_diff / v_scale).item()
-            max_relative_change = max(relative_change_u, relative_change_v)
-
-            if max_relative_change < self.config.implicit_tolerance:
-                # Converged - print diagnostic info occasionally
-                if t < 0.001 or iteration > 3:  # Log first step or slow convergence
-                    print(f"Implicit solver converged in {iteration + 1} iterations (tol={max_relative_change:.2e})")
-                break
-
-        # Apply damping
-        u_next = u_next * self.config.damping
-        v_next = v_next * self.config.damping
-
-        # Apply boundary conditions
-        if self.config.boundary_type == "stress_free_all":
-            u_next, v_next = self.bc.apply_stress_free_explicit(u_next, v_next)
-        else:
-            u_next, v_next = self.bc.apply_fixed_boundaries(u_next, v_next)
-            u_next, v_next = self.bc.apply_free_surface_top(u_next, v_next)
-
-        # Apply wave source (always P-wave input)
-        source_amplitude = self.source.get_amplitude(t)
+    def _apply_constraints(self, u, v, t):
+        u, v = self.bc.apply_fixed_boundaries(u, v)
+        amplitude = self.source.get_amplitude(t + self.config.dt)
         if self.config.source_mode == "boundary":
-            # Driven boundary: prescribe displacement at left edge
-            u_next, v_next = self.bc.apply_driven_left_boundary(u_next, v_next, source_amplitude, "P")
-        else:
-            # Interior source: inject at internal grid points
-            u_next, v_next = self.bc.apply_source(u_next, v_next, source_amplitude, "P", self.config.input_mode)
+            return self.bc.apply_driven_left_boundary(u, v, amplitude, "P")
+        u, v = self.bc.apply_source(u, v, amplitude, "P", self.config.input_mode)
+        return self.bc.apply_fixed_boundaries(u, v)
 
-        # Update state
-        state.advance(u_next, v_next)
+    def _step_implicit(self, state: WaveFieldState, t: float):
+        """Newmark average-acceleration recurrence, solved by fixed-point iteration."""
+        acc_u, acc_v = self._accelerations(state.u, state.v)
+        prev_u, prev_v = self._accelerations(state.u_prev, state.v_prev)
+        u_next, v_next = self._time_integrate_explicit(
+            state.u, state.v, state.u_prev, state.v_prev, acc_u, acc_v)
+        u_next, v_next = self._apply_constraints(u_next, v_next, t)
+        for _ in range(self.config.implicit_iterations):
+            next_u, next_v = self._accelerations(u_next, v_next)
+            candidate_u, candidate_v = self._time_integrate_explicit(
+                state.u, state.v, state.u_prev, state.v_prev,
+                (prev_u + 2*acc_u + next_u)/4, (prev_v + 2*acc_v + next_v)/4)
+            candidate_u, candidate_v = self._apply_constraints(candidate_u, candidate_v, t)
+            error = mx.maximum(mx.max(mx.abs(candidate_u-u_next)), mx.max(mx.abs(candidate_v-v_next)))
+            scale = mx.maximum(mx.maximum(mx.max(mx.abs(candidate_u)), mx.max(mx.abs(candidate_v))), 1e-12)
+            relative_change = (error / scale).item()
+            u_next, v_next = candidate_u, candidate_v
+            # MLX uses float32; iteration noise cannot resolve sub-ULP tolerances.
+            if np.isfinite(relative_change) and relative_change <= max(self.config.implicit_tolerance, 4 * np.finfo(np.float32).eps):
+                return u_next, v_next
+        raise RuntimeError("Implicit solver did not converge; reduce cfl_safety_factor or increase implicit_iterations")
 
     def _compute_acceleration_u(self, uxx: mx.array, uyy: mx.array, vxy: mx.array) -> mx.array:
         """Compute X-acceleration from Navier-Cauchy equation."""
@@ -666,8 +417,9 @@ class WaveSolver:
         """
         dt = self.config.dt
 
-        u_next = 2 * u - u_prev + (dt**2) * acc_u
-        v_next = 2 * v - v_prev + (dt**2) * acc_v
+        retention = self.config.damping
+        u_next = (1 + retention) * u - retention * u_prev + (dt**2) * (1 + retention)/2 * acc_u
+        v_next = (1 + retention) * v - retention * v_prev + (dt**2) * (1 + retention)/2 * acc_v
 
         return u_next, v_next
 
@@ -682,4 +434,4 @@ class WaveSolver:
             True if unstable (exploded), False if stable
         """
         max_disp = state.get_max_displacement()
-        return max_disp > 1e-3
+        return not np.isfinite(max_disp) or max_disp > max(1e-3, 100 * abs(self.config.source_amplitude))

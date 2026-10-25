@@ -19,20 +19,19 @@ def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
 
     Args:
         config: Simulation configuration
-        wave_type: 'P' for P-wave, 'S' for S-wave, 'Both' for both
+        wave_type: display component: 'P' for x, 'S' for y, 'Both' for magnitude; input stays P-polarized
 
     Returns:
         Tuple of (state, solver)
     """
-    # Set the wave type in config
-    config.wave_type = wave_type
+    config.validate()
 
     # Initialize wave field state
     state = WaveFieldState(config.nx, config.ny)
-    state.set_wave_type(wave_type)
+    state.set_display_mode(wave_type)
 
     # Initialize finite difference operator
-    fd_operator = FiniteDifferenceOperator(config.dx, config.dy, order=4)
+    fd_operator = FiniteDifferenceOperator(config.dx, config.dy, order=config.finite_diff_order)
 
     # Initialize boundary conditions
     bc = BoundaryConditions(
@@ -64,14 +63,13 @@ def run_simulation(config: SimulationConfig, wave_type: str, export_gif: bool = 
 
     Args:
         config: Simulation configuration
-        wave_type: 'P' for P-wave, 'S' for S-wave, 'Both' for both
+        wave_type: display component: 'P' for x, 'S' for y, 'Both' for magnitude; input stays P-polarized
         export_gif: If True, export to GIF; otherwise run visualization
     """
     state, solver = _initialize_simulation(config, wave_type)
 
     if export_gif:
         # Use GIF exporter
-        config.steps = config.gif_num_steps
         exporter = GifExporter(config, state, solver)
         exporter.run()
     else:
@@ -109,9 +107,9 @@ def main(export_gif: bool = False):
         print("\n" + "=" * 60)
         print("Running Elastic Wave Simulation (P-wave Input)")
         print("Use keyboard shortcuts to switch display mode:")
-        print("  p: Show P-wave (X-displacement, compressional)")
-        print("  s: Show S-wave (Y-displacement, mode conversion)")
-        print("  b: Show both (combined magnitude)")
+        print("  p: Show X-displacement")
+        print("  s: Show Y-displacement")
+        print("  b: Show displacement magnitude")
         print("=" * 60)
 
     run_simulation(config, "P", export_gif=export_gif)

@@ -1,13 +1,12 @@
 [project]
 name = "elastic-wave-propagate-on-the-2d-plate"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Educational 2D elastic wave simulation using MLX"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 dependencies = [
 	"matplotlib",
 	"mlx",
 	"numpy",
-	"imageio",
 	"Pillow",
 ]

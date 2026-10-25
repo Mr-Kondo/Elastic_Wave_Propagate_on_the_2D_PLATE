@@ -1,14 +1,12 @@
 """
 GIF export functionality for elastic wave simulation animations.
 
-Exports wave field animations as GIF files for P-wave, S-wave, and combined magnitude.
+Exports x-displacement, y-displacement and magnitude; legacy filenames are retained.
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
-import imageio
-import io
 from PIL import Image
 import mlx.core as mx
 
@@ -39,7 +37,7 @@ class GifExporter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Calculate frame parameters
-        self.total_frames = config.gif_num_steps // config.gif_frame_interval
+        self.total_frames = (config.gif_num_steps + config.gif_frame_interval - 1) // config.gif_frame_interval
         self.frame_interval_ms = max(1, int(1000 / config.gif_frame_rate))
 
         # Frame storage
@@ -49,11 +47,11 @@ class GifExporter:
 
         # Track value ranges for consistent scaling
         self.p_wave_min = 0.0
-        self.p_wave_max = 1.0
+        self.p_wave_max = 0.0
         self.s_wave_min = 0.0
-        self.s_wave_max = 1.0
+        self.s_wave_max = 0.0
         self.combined_min = 0.0
-        self.combined_max = 1.0
+        self.combined_max = 0.0
 
     def _update_field_ranges(self, p_field: np.ndarray, s_field: np.ndarray, combined_field: np.ndarray) -> None:
         """
@@ -83,7 +81,7 @@ class GifExporter:
                 self.combined_max = combined_abs_max
 
     def _render_frame_with_scaling(
-        self, field_data: np.ndarray, vmin: float, vmax: float, title: str, wave_type: str = "P"
+        self, field_data: np.ndarray, vmin: float, vmax: float, title: str
     ) -> np.ndarray:
         """
         Render a frame with contour lines only (no colormap background).
@@ -93,20 +91,16 @@ class GifExporter:
             vmin: Minimum value for scaling
             vmax: Maximum value for scaling
             title: Frame title
-            wave_type: Wave type for title ('P', 'S', or 'Combined')
 
         Returns:
             RGB image array
         """
-        import io
-        from PIL import Image
-
         # Create a figure for rendering
         fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
 
         # Calculate physical extent
-        x_extent = self.config.nx * self.config.dx
-        y_extent = self.config.ny * self.config.dy
+        x_extent = (self.config.nx - 1) * self.config.dx
+        y_extent = (self.config.ny - 1) * self.config.dy
 
         # Create X, Y coordinate grids for contour plot
         x = np.linspace(0, x_extent, self.config.nx)
@@ -114,6 +108,8 @@ class GifExporter:
         X, Y = np.meshgrid(x, y)
 
         # Plot contour lines only (no background colormap)
+        if vmax <= vmin:
+            vmax = vmin + 1e-12
         levels = np.linspace(vmin, vmax, 15)  # 15 contour levels
         contours = ax.contour(X, Y, field_data, levels=levels, colors="black", linewidths=1.0, alpha=0.7)
 
@@ -127,13 +123,8 @@ class GifExporter:
         ax.set_ylim(0, y_extent)
         ax.set_aspect("equal")
 
-        # Render to RGB array using PIL buffer
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", bbox_inches="tight", dpi=100, facecolor="white")
-        buf.seek(0)
-        img = Image.open(buf)
-        rgb_array = np.array(img.convert("RGB"))
-
+        fig.canvas.draw()
+        rgb_array = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].copy()
         plt.close(fig)
 
         return rgb_array
@@ -152,6 +143,9 @@ class GifExporter:
         u_np = np.array(self.state.u[0, :, :, 0])  # X-displacement
         v_np = np.array(self.state.v[0, :, :, 0])  # Y-displacement
 
+        if not np.isfinite(u_np).all() or not np.isfinite(v_np).all():
+            raise RuntimeError(f"Non-finite displacement at step {self.current_step}")
+
         # Combined magnitude
         combined_np = np.sqrt(u_np**2 + v_np**2)
 
@@ -159,12 +153,12 @@ class GifExporter:
 
     def run(self) -> None:
         """Run simulation and collect frames for all three wave types."""
-        print(f"\nStarting GIF export simulation...")
+        print("\nStarting GIF export simulation...")
         print(f"Output directory: {self.output_dir}")
         print(f"Total steps: {self.config.gif_num_steps}")
         print(f"Frame rate: {self.config.gif_frame_rate} fps")
         print(f"Expected frames: {self.total_frames}")
-        print(f"Collecting frames for: P-wave, S-wave, Combined magnitude\n")
+        print("Collecting frames for: X-displacement, Y-displacement, magnitude\n")
 
         # First pass: collect frames and determine scaling
         print("Pass 1: Collecting frames and determining scaling...")
@@ -188,9 +182,9 @@ class GifExporter:
             self._update_field_ranges(p_field, s_field, combined_field)
 
             # Store frame data
-            self.p_wave_frames.append(p_field.copy())
-            self.s_wave_frames.append(s_field.copy())
-            self.combined_frames.append(combined_field.copy())
+            self.p_wave_frames.append(p_field)
+            self.s_wave_frames.append(s_field)
+            self.combined_frames.append(combined_field)
 
             frame_count += 1
 
@@ -209,53 +203,20 @@ class GifExporter:
         print("GIF export complete!")
 
     def _render_and_save_gifs(self) -> None:
-        """Render collected frames and save as GIF files."""
-        p_wave_images = []
-        s_wave_images = []
-        combined_images = []
-
-        print(f"  Rendering P-wave animation...")
-        for i, p_field in enumerate(self.p_wave_frames):
-            title = f"P-wave Displacement | Step: {(i + 1) * self.config.gif_frame_interval:4d}"
-            img = self._render_frame_with_scaling(p_field, self.p_wave_min, self.p_wave_max, title, wave_type="P")
-            p_wave_images.append(img)
-
-            if (i + 1) % max(1, len(self.p_wave_frames) // 10) == 0:
-                print(f"    Rendered {i + 1}/{len(self.p_wave_frames)} frames...")
-
-        print(f"  Rendering S-wave animation...")
-        for i, s_field in enumerate(self.s_wave_frames):
-            title = f"S-wave Displacement | Step: {(i + 1) * self.config.gif_frame_interval:4d}"
-            img = self._render_frame_with_scaling(s_field, self.s_wave_min, self.s_wave_max, title, wave_type="S")
-            s_wave_images.append(img)
-
-            if (i + 1) % max(1, len(self.s_wave_frames) // 10) == 0:
-                print(f"    Rendered {i + 1}/{len(self.s_wave_frames)} frames...")
-
-        print(f"  Rendering combined magnitude animation...")
-        for i, combined_field in enumerate(self.combined_frames):
-            title = f"Combined Magnitude | Step: {(i + 1) * self.config.gif_frame_interval:4d}"
-            img = self._render_frame_with_scaling(
-                combined_field, self.combined_min, self.combined_max, title, wave_type="Combined"
-            )
-            combined_images.append(img)
-
-            if (i + 1) % max(1, len(self.combined_frames) // 10) == 0:
-                print(f"    Rendered {i + 1}/{len(self.combined_frames)} frames...")
-
-        # Save GIFs
-        print(f"\n  Saving GIF files...")
-
-        p_wave_path = self.output_dir / "p_wave_animation.gif"
-        imageio.mimsave(p_wave_path, p_wave_images, duration=self.frame_interval_ms / 1000.0)
-        print(f"    Saved: {p_wave_path}")
-
-        s_wave_path = self.output_dir / "s_wave_animation.gif"
-        imageio.mimsave(s_wave_path, s_wave_images, duration=self.frame_interval_ms / 1000.0)
-        print(f"    Saved: {s_wave_path}")
-
-        combined_path = self.output_dir / "combined_magnitude.gif"
-        imageio.mimsave(combined_path, combined_images, duration=self.frame_interval_ms / 1000.0)
-        print(f"    Saved: {combined_path}")
-
-        print(f"\nAll GIF files saved to: {self.output_dir}")
+        """Render one component at a time; Pillow's GIF duration is in milliseconds."""
+        for fields, vmin, vmax, filename, label in (
+            (self.p_wave_frames, self.p_wave_min, self.p_wave_max, "p_wave_animation.gif", "X-displacement"),
+            (self.s_wave_frames, self.s_wave_min, self.s_wave_max, "s_wave_animation.gif", "Y-displacement"),
+            (self.combined_frames, self.combined_min, self.combined_max, "combined_magnitude.gif", "Displacement magnitude"),
+        ):
+            images = []
+            for i, field in enumerate(fields):
+                step = min((i + 1) * self.config.gif_frame_interval, self.config.gif_num_steps)
+                frame = self._render_frame_with_scaling(field, vmin, vmax, f"{label} | Step: {step:4d}")
+                images.append(Image.fromarray(frame))
+            images[0].save(self.output_dir / filename, save_all=True, append_images=images[1:],
+                           duration=self.frame_interval_ms, loop=0)
+            for frame in images:
+                frame.close()
+            del images
+            fields.clear()
