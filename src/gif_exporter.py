@@ -4,15 +4,15 @@ GIF export functionality for elastic wave simulation animations.
 Exports x-displacement, y-displacement and magnitude; legacy filenames are retained.
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
 from PIL import Image
-import mlx.core as mx
 
 from config import SimulationConfig
-from state import WaveFieldState
 from solver import WaveSolver
+from state import WaveFieldState
 
 
 class GifExporter:
@@ -66,19 +66,11 @@ class GifExporter:
         s_abs_max = np.abs(s_field).max()
         combined_abs_max = np.abs(combined_field).max()
 
-        if p_abs_max > 0:
-            if self.p_wave_max < p_abs_max:
-                self.p_wave_max = p_abs_max
-                self.p_wave_min = -p_abs_max
-
-        if s_abs_max > 0:
-            if self.s_wave_max < s_abs_max:
-                self.s_wave_max = s_abs_max
-                self.s_wave_min = -s_abs_max
-
-        if combined_abs_max > 0:
-            if self.combined_max < combined_abs_max:
-                self.combined_max = combined_abs_max
+        self.p_wave_max = max(self.p_wave_max, p_abs_max)
+        self.p_wave_min = -self.p_wave_max
+        self.s_wave_max = max(self.s_wave_max, s_abs_max)
+        self.s_wave_min = -self.s_wave_max
+        self.combined_max = max(self.combined_max, combined_abs_max)
 
     def _render_frame_with_scaling(
         self, field_data: np.ndarray, vmin: float, vmax: float, title: str
@@ -136,9 +128,6 @@ class GifExporter:
         Returns:
             Tuple of (p_wave_field, s_wave_field, combined_field) as numpy arrays
         """
-        # Evaluate MLX arrays
-        mx.eval(self.state.u, self.state.v)
-
         # Get fields as numpy arrays
         u_np = np.array(self.state.u[0, :, :, 0])  # X-displacement
         v_np = np.array(self.state.v[0, :, :, 0])  # Y-displacement

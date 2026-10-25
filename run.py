@@ -3,9 +3,9 @@
 Run script for 2D Elastic Wave Propagation Simulation.
 """
 
+import argparse
 import sys
 from pathlib import Path
-import argparse
 
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))

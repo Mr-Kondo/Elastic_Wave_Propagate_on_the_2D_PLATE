@@ -2,20 +2,19 @@
 Visualization and animation for elastic wave simulation.
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.animation import FuncAnimation
-import mlx.core as mx
 
 from config import SimulationConfig
-from state import WaveFieldState
 from solver import WaveSolver
+from state import WaveFieldState
 
 
 class WaveVisualizer:
     """Handles visualization and animation of wave fields."""
 
-    def __init__(self, config: SimulationConfig, state: WaveFieldState, solver: WaveSolver, wave_type: str = None):
+    def __init__(self, config: SimulationConfig, state: WaveFieldState, solver: WaveSolver, wave_type: str | None = None):
         """
         Initialize visualizer.
 
@@ -56,7 +55,8 @@ class WaveVisualizer:
         # extent = [left, right, bottom, top] in data coordinates
         x_extent = (self.config.nx - 1) * self.config.dx
         y_extent = (self.config.ny - 1) * self.config.dy
-        extent = [0, x_extent, 0, y_extent]
+        extent = [-self.config.dx/2, x_extent+self.config.dx/2,
+                  -self.config.dy/2, y_extent+self.config.dy/2]
 
         # Initialize with dynamic scaling (will be updated each frame)
         self.im = self.ax.imshow(
@@ -66,11 +66,13 @@ class WaveVisualizer:
             vmax=1e-6,
             origin="lower",
             extent=extent,
-            aspect="auto",
+            aspect="equal",
         )
+        self.ax.set_xlim(0, x_extent)
+        self.ax.set_ylim(0, y_extent)
 
         # Colorbar removed - display area maximized for wave visualization
-        self.title = self.ax.set_title("Elastic Wave Simulation (MLX) - Press 'p' for X, 's' for Y displacement")
+        self.title = self.ax.set_title("Elastic Wave Simulation - Press 'p' for X, 's' for Y displacement")
 
         # Set axis labels with physical units
         self.ax.set_xlabel("X direction (m)")
@@ -123,9 +125,6 @@ class WaveVisualizer:
                 print(f"Warning: Large displacement detected at step {self.current_step} (continuing simulation)")
 
             self.current_step += 1
-
-        # Evaluate MLX arrays
-        mx.eval(self.state.u, self.state.v)
 
         # Get display field based on wave type
         disp_field = self.state.get_display_field()
@@ -189,23 +188,20 @@ class WaveVisualizer:
     def _on_key(self, event):
         """
         Keyboard event handler - switches display mode only (not input wave).
-        Input is always P-wave; S-wave and combined modes are from mode conversion.
+        Source is unchanged; keys select displacement components.
 
         Args:
             event: Keyboard event
         """
-        if event.key == "p":
-            if self.state.display_mode != "P":
-                self.state.set_display_mode("P")
-                print("Display switched to X-displacement")
-        elif event.key == "s":
-            if self.state.display_mode != "S":
-                self.state.set_display_mode("S")
-                print("Display switched to Y-displacement")
-        elif event.key == "b":
-            if self.state.display_mode != "Both":
-                self.state.set_display_mode("Both")
-                print("Display switched to combined (magnitude of P+S)")
+        if event.key == "p" and self.state.display_mode != "P":
+            self.state.set_display_mode("P")
+            print("Display switched to X-displacement")
+        elif event.key == "s" and self.state.display_mode != "S":
+            self.state.set_display_mode("S")
+            print("Display switched to Y-displacement")
+        elif event.key == "b" and self.state.display_mode != "Both":
+            self.state.set_display_mode("Both")
+            print("Display switched to displacement magnitude")
 
     def run(self):
         """Run the animation."""

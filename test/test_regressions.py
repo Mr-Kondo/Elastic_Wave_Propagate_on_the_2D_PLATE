@@ -8,16 +8,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import mlx.core as mx
 import numpy as np
 from PIL import Image
 
 from config import SimulationConfig
-from main import _initialize_simulation
-from solver import FiniteDifferenceOperator
 from gif_exporter import GifExporter
+from main import _initialize_simulation
+from solver import ElasticOperator
 from visualizer import WaveVisualizer
 
 
@@ -27,45 +27,47 @@ class NumericalTests(unittest.TestCase):
         state, solver = _initialize_simulation(config, "P")
         for component in ("u", "v"):
             state.reset()
-            setattr(state, component, mx.full(state.u.shape, float("nan")))
+            setattr(state, component, np.full(state.u.shape, float("nan")))
             self.assertTrue(np.isnan(state.get_max_displacement()))
             self.assertTrue(solver.check_stability(state))
 
     def test_cfl_uses_fastest_speed_and_both_spacings(self):
         config = SimulationConfig(dx=0.02, dy=0.001, poisson_ratio=0.49)
-        limit = np.sqrt(3) / (2 * config.p_wave_speed * np.hypot(1 / config.dx, 1 / config.dy))
+        limit = np.sqrt(config.density/(2*(config.lame_lambda+config.lame_mu))) / np.hypot(1/config.dx, 1/config.dy)
         self.assertAlmostEqual(config.dt, config.cfl_safety_factor * limit)
 
     def test_invalid_configs_are_rejected(self):
-        for options in ({"dx": np.nan}, {"density": np.inf}, {"nx": 4},
+        for options in ({"dx": np.nan}, {"density": np.inf}, {"nx": 1},
                         {"boundary_width": 0}, {"plot_interval": 0},
                         {"gif_frame_interval": 0}, {"steps": 1.5},
-                        {"implicit_iterations": 0}, {"cfl_safety_factor": 1.1},
-                        {"source_x_end": 200}, {"finite_diff_order": 2},
-                        {"source_mode": "typo"}):
+                        {"cfl_safety_factor": 1.1},
+                        {"source_x_end": 200}, {"source_mode": "typo"}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 SimulationConfig(**options).validate()
 
-    def test_derivatives_and_operator_reuse(self):
-        fd = FiniteDifferenceOperator(0.02, 0.03)
-        for ny, nx in ((13, 17), (15, 21)):
-            y, x = np.mgrid[:ny, :nx]
-            field = ((x * fd.dx)**2 + (y * fd.dy)**2 + x * fd.dx * y * fd.dy).astype(np.float32)
-            u = mx.array(field[None, :, :, None])
-            derivatives = fd.compute_derivatives(u, u)
-            for derivative, expected in zip(derivatives, (2, 2, 1, 2, 2, 1)):
-                self.assertEqual(derivative.shape, u.shape)
-                np.testing.assert_allclose(np.array(derivative)[0, 2:-2, 2:-2, 0], expected, atol=3e-4)
+    def test_affine_strain_energy(self):
+        config = SimulationConfig(nx=9, ny=7, source_mode="interior")
+        operator = ElasticOperator(config)
+        y, x = np.mgrid[:config.ny, :config.nx]
+        xx, yy = x*config.dx, y*config.dy
+        exx, eyy, shear = 0.03, -0.02, 0.01
+        u = (exx*xx+shear*yy)[None, :, :, None]
+        v = (eyy*yy)[None, :, :, None]
+        values = operator.pack(u, v)
+        area = (config.nx-1)*config.dx*(config.ny-1)*config.dy
+        density = config.lame_lambda/2*(exx+eyy)**2 + config.lame_mu*(exx**2+eyy**2+shear**2/2)
+        self.assertAlmostEqual(values @ (operator.stiffness @ values)/2, area*density, places=12)
+        self.assertAlmostEqual(operator.mass.sum(), 2*config.density*area, places=12)
 
     def test_free_boundaries_preserve_rigid_motion(self):
         config = SimulationConfig(nx=21, ny=17, dx=0.03, dy=0.02, source_mode="interior")
         state, solver = _initialize_simulation(config, "P")
         y, x = np.mgrid[:config.ny, :config.nx]
         # A translation plus infinitesimal rotation has identically zero strain.
-        u = mx.array((0.001 - 0.002 * y * config.dy).astype(np.float32)[None, :, :, None])
-        v = mx.array((-0.001 + 0.002 * x * config.dx).astype(np.float32)[None, :, :, None])
-        for derivative in solver.fd.compute_derivatives(u, v, solver.bc):
-            np.testing.assert_allclose(np.array(derivative), 0, atol=8e-6)
+        u = np.array((0.001 - 0.002 * y * config.dy).astype(np.float64)[None, :, :, None])
+        v = np.array((-0.001 + 0.002 * x * config.dx).astype(np.float64)[None, :, :, None])
+        acceleration = solver.operator.acceleration(solver.operator.pack(u, v))
+        np.testing.assert_allclose(acceleration, 0, atol=1e-11)
         state.u, state.v, state.u_prev, state.v_prev = u, v, u, v
         solver.source.amplitude = 0
         solver.step(state, 0)
@@ -88,55 +90,59 @@ class NumericalTests(unittest.TestCase):
         np.testing.assert_array_equal(field[-2:], 0)
         self.assertGreater(np.max(np.abs(field[2:-2, 6:8])), 0)
 
-    def test_traction_closure_on_each_free_side(self):
-        config = SimulationConfig(nx=21, ny=17, source_mode="interior")
-        state, solver = _initialize_simulation(config, "P")
-        y, x = np.mgrid[:config.ny, :config.nx]
-        u = mx.array((np.sin(x/8) * np.cos(y/9)).astype(np.float32)[None, :, :, None])
-        v = mx.array((np.cos(x/7) * np.sin(y/8)).astype(np.float32)[None, :, :, None])
-        pu, pv = (np.array(a)[0, :, :, 0] for a in solver.bc.pad_fields(u, v))
-        alpha = config.lame_lambda / (config.lame_lambda + 2*config.lame_mu)
-        for row in (2, config.ny+1):
-            uy = (pu[row-2]-8*pu[row-1]+8*pu[row+1]-pu[row+2])/(12*config.dy)
-            vy = (pv[row-2]-8*pv[row-1]+8*pv[row+1]-pv[row+2])/(12*config.dy)
-            ux = (pu[row, 3:-1]-pu[row, 1:-3])/(2*config.dx)
-            vx = (pv[row, 3:-1]-pv[row, 1:-3])/(2*config.dx)
-            # Corner closures are sequential approximations, not simultaneous traction constraints.
-            np.testing.assert_allclose(uy[3:-3]+vx[1:-1], 0, atol=2e-5)
-            np.testing.assert_allclose(vy[3:-3]+alpha*ux[1:-1], 0, atol=2e-5)
-        for col in (2, config.nx+1):
-            ux = (pu[:, col-2]-8*pu[:, col-1]+8*pu[:, col+1]-pu[:, col+2])/(12*config.dx)
-            vx = (pv[:, col-2]-8*pv[:, col-1]+8*pv[:, col+1]-pv[:, col+2])/(12*config.dx)
-            uy = (pu[3:-1, col]-pu[1:-3, col])/(2*config.dy)
-            vy = (pv[3:-1, col]-pv[1:-3, col])/(2*config.dy)
-            np.testing.assert_allclose(ux[3:-3]+alpha*vy[1:-1], 0, atol=2e-5)
-            np.testing.assert_allclose(vx[3:-3]+uy[1:-1], 0, atol=2e-5)
+    def test_driven_boundary_is_not_blocked_by_a_fixed_strip(self):
+        for boundary in ("fixed", "free_top"):
+            config = SimulationConfig(nx=25, ny=17, boundary_width=2, boundary_type=boundary)
+            state, solver = _initialize_simulation(config, "P")
+            for step in range(40):
+                solver.step(state, step*config.dt)
+            self.assertGreater(np.max(np.abs(state.u[0, 2:-2, 3:, 0])), 1e-8)
+
+    def test_natural_boundary_stiffness_is_symmetric_and_nonnegative(self):
+        from scipy.linalg import eigvalsh
+        for nu, ratio in ((0, 1), (.25, 1), (.45, 1), (.49, 1), (.4999, 1), (.25, .5), (.25, 2)):
+            config = SimulationConfig(nx=9, ny=9, dx=.02, dy=.02*ratio, poisson_ratio=nu)
+            operator = ElasticOperator(config)
+            normalized = operator.stiffness.toarray()/np.sqrt(operator.mass[:, None]*operator.mass[None, :])
+            scale = np.max(np.abs(normalized))
+            self.assertLess(np.max(np.abs(normalized-normalized.T))/scale, 100*np.finfo(float).eps)
+            eigenvalues = eigvalsh(normalized)
+            tolerance = 100*np.finfo(float).eps*eigenvalues[-1]
+            self.assertGreater(eigenvalues[0], -tolerance)
+            self.assertEqual(np.count_nonzero(np.abs(eigenvalues)<tolerance), 3)
+            self.assertLess(config.dt*np.sqrt(eigenvalues[-1]), 2)
 
     def test_time_integrators_converge_quadratically(self):
+        from scipy.linalg import eigh
+        config = SimulationConfig(nx=5, ny=5, dx=.2, dy=.2, damping=1, source_mode="interior",
+                                  source_amplitude=0, source_x_start=2, source_x_end=3)
+        operator = ElasticOperator(config)
+        eigenvalues, modes = eigh(operator.stiffness.toarray(), np.diag(operator.mass))
+        omega, mode = np.sqrt(eigenvalues[3]), modes[:, 3]
         for method in ("explicit", "implicit"):
             errors = []
             for count in (20, 40):
-                config = SimulationConfig(dx=0.2, dy=0.2, damping=1, time_integration=method)
-                config.cfl_safety_factor *= (1/count)/config.dt
+                config.time_integration = method
+                config.cfl_safety_factor *= (1/(omega*count))/config.dt
                 state, solver = _initialize_simulation(config, "P")
-                state.u = mx.ones_like(state.u)
-                state.u_prev = state.u * np.cos(3*config.dt)
-                solver._accelerations = lambda u, v: (-9*u, -9*v)
-                solver._apply_constraints = lambda u, v, t: (u, v)
+                state.u, state.v = operator.fields(mode)
+                state.u_prev, state.v_prev = operator.fields(mode*np.cos(omega*config.dt))
                 for step in range(count):
                     solver.step(state, step*config.dt)
-                errors.append(abs(state.u[0, 0, 0, 0].item()-np.cos(3)))
+                amplitude = mode @ (operator.mass*operator.pack(state.u, state.v))
+                errors.append(abs(amplitude-np.cos(1)))
             with self.subTest(method=method):
                 self.assertGreater(errors[0]/errors[1], 3)
                 self.assertLess(errors[0]/errors[1], 5)
 
-    def test_implicit_failure_is_reported_without_advancing(self):
-        config = SimulationConfig(implicit_iterations=1, implicit_tolerance=1e-15)
+    def test_failed_implicit_solve_does_not_advance(self):
+        config = SimulationConfig()
         state, solver = _initialize_simulation(config, "P")
-        initial = np.array(state.u)
+        initial = state.u.copy()
+        solver._solve = lambda rhs: np.full_like(rhs, np.nan)
         with self.assertRaises(RuntimeError):
             solver.step(state, 0)
-        np.testing.assert_array_equal(np.array(state.u), initial)
+        np.testing.assert_array_equal(state.u, initial)
 
 
 class OutputTests(unittest.TestCase):
@@ -151,7 +157,7 @@ class OutputTests(unittest.TestCase):
         for frame in range(6):
             view._animate(frame)
         self.assertEqual(view.current_step, 12)
-        state.v = mx.full(state.v.shape, float("nan"))
+        state.v = np.full(state.v.shape, float("nan"))
         with self.assertRaises(RuntimeError):
             view._animate(7)
         with tempfile.TemporaryDirectory() as directory:
@@ -167,7 +173,12 @@ class OutputTests(unittest.TestCase):
         view._animate(0)
         view._animate(1)
         self.assertEqual(view.current_step, 3)
-        self.assertAlmostEqual(view.im.get_extent()[1], (config.nx - 1) * config.dx)
+        left, right, bottom, top = view.im.get_extent()
+        pixel_width = (right-left)/config.nx
+        pixel_height = (top-bottom)/config.ny
+        np.testing.assert_allclose(left+pixel_width*(np.arange(config.nx)+.5), np.arange(config.nx)*config.dx, atol=1e-14)
+        np.testing.assert_allclose(bottom+pixel_height*(np.arange(config.ny)+.5), np.arange(config.ny)*config.dy, atol=1e-14)
+        self.assertEqual(view.ax.get_aspect(), 1.)
         vertices = np.concatenate([path.vertices for path in view.ax.collections[-1].get_paths() if path.vertices.size])
         self.assertLessEqual(vertices[:, 0].max(), (config.nx - 1) * config.dx + 1e-6)
 
