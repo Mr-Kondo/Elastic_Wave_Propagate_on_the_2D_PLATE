@@ -3,6 +3,7 @@ Configuration management for elastic wave simulation.
 """
 
 from dataclasses import dataclass
+
 import numpy as np
 
 
@@ -28,8 +29,6 @@ class SimulationConfig:
     damping: float = 0.9995  # Per-step velocity retention; 1 disables damping
     cfl_safety_factor: float = 0.15  # CFL condition safety factor (slightly conservative, better wave resolution)
     time_integration: str = "implicit"  # Time integration method: 'explicit' or 'implicit'
-    implicit_iterations: int = 30  # Maximum iterations for implicit solver
-    implicit_tolerance: float = 1e-7  # Convergence tolerance for implicit solver
     boundary_type: str = "stress_free_all"  # Boundary condition type: 'fixed', 'free_top', or 'stress_free_all'
 
     # Source settings
@@ -47,9 +46,6 @@ class SimulationConfig:
 
     # Boundary settings
     boundary_width: int = 5  # Width of fixed boundary (grid points)
-
-    # Numerical settings
-    finite_diff_order: int = 4  # Finite difference order
 
     # GIF export settings
     gif_export: bool = False  # Enable GIF export mode
@@ -94,10 +90,8 @@ class SimulationConfig:
     @property
     def dt(self) -> float:
         """Time step size based on CFL condition for both P and S waves."""
-        # Fourth-order second differences have spectral radius 16/(3*h**2).
-        return self.cfl_safety_factor * np.sqrt(3) / (
-            2 * self.p_wave_speed * np.hypot(1 / self.dx, 1 / self.dy)
-        )
+        # Q1 energy and lumped-mass bounds give omega_max**2 <= 8*(lambda+mu)/rho * sum(1/h**2).
+        return self.cfl_safety_factor * np.sqrt(self.density/(2*(self.lame_lambda+self.lame_mu))) / np.hypot(1/self.dx, 1/self.dy)
 
     @property
     def source_duration(self) -> float:
@@ -107,27 +101,25 @@ class SimulationConfig:
     def validate(self) -> None:
         """Validate configuration parameters."""
         positive = ("youngs_modulus", "density", "dx", "dy", "target_wavelength",
-                    "playback_seconds", "source_duration_cycles", "implicit_tolerance")
+                    "playback_seconds", "source_duration_cycles")
         for name in positive:
             value = getattr(self, name)
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be finite and positive")
         integers = ("nx", "ny", "steps", "plot_interval", "boundary_width",
-                    "implicit_iterations", "gif_num_steps", "gif_frame_rate", "gif_frame_interval")
+                    "gif_num_steps", "gif_frame_rate", "gif_frame_interval")
         for name in integers:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if min(self.nx, self.ny) < 5:
-            raise ValueError("Fourth-order stencils require at least 5 grid points per axis")
+        if min(self.nx, self.ny) < 2:
+            raise ValueError("Q1 elements require at least 2 grid points per axis")
         if not np.isfinite(self.source_amplitude):
             raise ValueError("source_amplitude must be finite")
         if not (0 < self.cfl_safety_factor <= 1):
             raise ValueError("cfl_safety_factor must be in (0, 1]")
         if not (0 < self.damping <= 1):
             raise ValueError("damping must be in (0, 1]")
-        if self.finite_diff_order != 4:
-            raise ValueError("Only fourth-order finite differences are supported")
         if self.source_mode not in ("boundary", "interior"):
             raise ValueError("source_mode must be 'boundary' or 'interior'")
         if self.input_mode not in ("radial", "uniform_edge"):
@@ -145,10 +137,10 @@ class SimulationConfig:
 
             warnings.warn(
                 f"Poisson ratio {self.poisson_ratio} is very close to 0.5. "
-                "This can cause numerical instability (ill-conditioned Lamé parameters). "
-                "Consider using ν ≤ 0.45 for better stability, or use implicit time integration."
+                "B-bar reduces volumetric locking, but conditioning and spatial resolution "
+                "still require care near the incompressible limit."
             )
-        if self.boundary_width * 2 >= min(self.nx, self.ny):
+        if self.boundary_type != "stress_free_all" and self.boundary_width * 2 >= min(self.nx, self.ny):
             raise ValueError("Boundary width too large for grid size")
         if self.time_integration not in ["explicit", "implicit"]:
             raise ValueError("time_integration must be 'explicit' or 'implicit'")

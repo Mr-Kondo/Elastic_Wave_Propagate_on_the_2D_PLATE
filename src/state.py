@@ -2,9 +2,9 @@
 Wave field state management for elastic wave simulation.
 """
 
-import mlx.core as mx
 from typing import Literal
 
+import numpy as np
 
 WaveType = Literal["P", "S", "Both"]
 
@@ -24,10 +24,10 @@ class WaveFieldState:
         self.ny = ny
 
         # Displacement fields (current and previous time steps)
-        self.u = mx.zeros((1, ny, nx, 1))  # X-displacement
-        self.v = mx.zeros((1, ny, nx, 1))  # Y-displacement
-        self.u_prev = mx.zeros((1, ny, nx, 1))
-        self.v_prev = mx.zeros((1, ny, nx, 1))
+        self.u = np.zeros((1, ny, nx, 1))  # X-displacement
+        self.v = np.zeros((1, ny, nx, 1))  # Y-displacement
+        self.u_prev = np.zeros((1, ny, nx, 1))
+        self.v_prev = np.zeros((1, ny, nx, 1))
 
         # Wave type selection - ALWAYS P-wave input (for source injection)
         # S-wave and combined modes arise from mode conversion
@@ -36,7 +36,7 @@ class WaveFieldState:
         # Display mode - controls what field is visualized (independent of input)
         self.display_mode: WaveType = "P"
 
-    def advance(self, u_next: mx.array, v_next: mx.array) -> None:
+    def advance(self, u_next: np.ndarray, v_next: np.ndarray) -> None:
         """
         Advance simulation to next time step.
 
@@ -49,7 +49,7 @@ class WaveFieldState:
         self.u = u_next
         self.v = v_next
 
-    def get_display_field(self) -> mx.array:
+    def get_display_field(self) -> np.ndarray:
         """
         Get the appropriate displacement field for visualization.
         Uses display_mode, not wave_type (which controls source injection).
@@ -63,7 +63,7 @@ class WaveFieldState:
             return self.v
         else:  # Both
             # Show combined magnitude: sqrt(u^2 + v^2)
-            return mx.sqrt(self.u**2 + self.v**2)
+            return np.sqrt(self.u**2 + self.v**2)
 
     def set_wave_type(self, wave_type: WaveType) -> None:
         """
@@ -92,13 +92,13 @@ class WaveFieldState:
         Returns:
             Maximum displacement magnitude
         """
-        max_u = mx.max(mx.abs(self.u))
-        max_v = mx.max(mx.abs(self.v))
-        return mx.maximum(max_u, max_v).item()
+        max_u = np.max(np.abs(self.u))
+        max_v = np.max(np.abs(self.v))
+        return np.maximum(max_u, max_v).item()
 
     def reset(self) -> None:
         """Reset all fields to zero."""
-        self.u = mx.zeros((1, self.ny, self.nx, 1))
-        self.v = mx.zeros((1, self.ny, self.nx, 1))
-        self.u_prev = mx.zeros((1, self.ny, self.nx, 1))
-        self.v_prev = mx.zeros((1, self.ny, self.nx, 1))
+        self.u = np.zeros((1, self.ny, self.nx, 1))
+        self.v = np.zeros((1, self.ny, self.nx, 1))
+        self.u_prev = np.zeros((1, self.ny, self.nx, 1))
+        self.v_prev = np.zeros((1, self.ny, self.nx, 1))

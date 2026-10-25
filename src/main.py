@@ -1,16 +1,16 @@
 """
-2D Elastic Wave Propagation Simulation using MLX
+2D Elastic Wave Propagation Simulation
 
 Simulates P-wave and S-wave propagation in a 2D elastic medium
-using the Navier-Cauchy equation with 4th-order finite differences.
+using a Q1 energy-form finite-element discretization.
 """
 
 from config import SimulationConfig
-from state import WaveFieldState
-from source import WaveSourceGenerator
-from solver import FiniteDifferenceOperator, BoundaryConditions, WaveSolver
-from visualizer import WaveVisualizer
 from gif_exporter import GifExporter
+from solver import BoundaryConditions, ElasticOperator, WaveSolver
+from source import WaveSourceGenerator
+from state import WaveFieldState
+from visualizer import WaveVisualizer
 
 
 def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
@@ -30,9 +30,6 @@ def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
     state = WaveFieldState(config.nx, config.ny)
     state.set_display_mode(wave_type)
 
-    # Initialize finite difference operator
-    fd_operator = FiniteDifferenceOperator(config.dx, config.dy, order=config.finite_diff_order)
-
     # Initialize boundary conditions
     bc = BoundaryConditions(
         config.nx,
@@ -43,7 +40,6 @@ def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
         boundary_type=config.boundary_type,
         source_mode=config.source_mode,
         config=config,
-        fd_operator=fd_operator,
     )
 
     # Initialize wave source generator
@@ -52,7 +48,8 @@ def _initialize_simulation(config: SimulationConfig, wave_type: str) -> tuple:
     )
 
     # Initialize wave solver
-    solver = WaveSolver(config, fd_operator, bc, source)
+    operator = ElasticOperator(config)
+    solver = WaveSolver(config, operator, bc, source)
 
     return state, solver
 
