@@ -13,8 +13,8 @@ class SimulationConfig:
     # Grid settings
     nx: int = 101
     ny: int = 20
-    dx: float = 0.009901  # Grid spacing in x (meters) - 1m domain / 101 points
-    dy: float = 0.0095  # Grid spacing in y (meters) - 0.19m domain / 20 points
+    dx: float = 0.009901  # Grid spacing in x (meters)
+    dy: float = 0.0095  # Grid spacing in y (meters)
 
     # Material properties
     youngs_modulus: float = 1000.0  # Young's modulus (Pa)
@@ -25,7 +25,7 @@ class SimulationConfig:
     steps: int = 2000  # Total simulation steps (increased to observe longer propagation)
     plot_interval: int = 2  # Update visualization every N steps
     playback_seconds: float = 20.0  # Animation playback duration
-    damping: float = 0.9995  # Energy damping factor (0.05% loss per step - preserves 49% amplitude at 2000 steps)
+    damping: float = 0.9995  # Per-step velocity retention; 1 disables damping
     cfl_safety_factor: float = 0.15  # CFL condition safety factor (slightly conservative, better wave resolution)
     time_integration: str = "implicit"  # Time integration method: 'explicit' or 'implicit'
     implicit_iterations: int = 30  # Maximum iterations for implicit solver
@@ -36,8 +36,8 @@ class SimulationConfig:
     target_wavelength: float = 0.64  # Target wavelength (m) - primary design condition
     source_amplitude: float = 1e-3  # Source amplitude (meters) - increased 10x for better S-wave visibility
     source_duration_cycles: float = 10.0  # Source duration in cycles (increased to 10.0 for continuous wave observation)
-    source_x_start: int = 1  # Source left boundary (driven BC applies to columns 0:source_x_end)
-    source_x_end: int = 2  # Source right boundary (only first 2 columns driven, allows wave propagation)
+    source_x_start: int = 1  # Interior source's first column (boundary mode drives column 0)
+    source_x_end: int = 2  # Interior source end column (exclusive)
     input_mode: str = "uniform_edge"  # Input mode: 'radial' or 'uniform_edge'
     wave_type: str = "p_wave"  # Wave type: 'p_wave', 's_wave', 'both_separate'
     source_mode: str = "boundary"  # Source mode: 'boundary' (left edge injection) or 'interior' (internal source)
@@ -56,16 +56,16 @@ class SimulationConfig:
     gif_num_steps: int = 560  # Number of simulation steps for GIF
     gif_frame_rate: int = 10  # GIF frame rate (fps)
     gif_output_dir: str = "./animation"  # Output directory for GIF files
-    gif_frame_interval: int = 2  # Visualization updates per solver step
+    gif_frame_interval: int = 2  # Solver steps per GIF frame
 
     @property
     def lame_mu(self) -> float:
-        """Lamé's first parameter (shear modulus)."""
+        """Shear modulus (second Lamé parameter)."""
         return self.youngs_modulus / (2 * (1 + self.poisson_ratio))
 
     @property
     def lame_lambda(self) -> float:
-        """Lamé's second parameter."""
+        """First Lamé parameter."""
         return (self.youngs_modulus * self.poisson_ratio) / ((1 + self.poisson_ratio) * (1 - 2 * self.poisson_ratio))
 
     @property
@@ -94,9 +94,10 @@ class SimulationConfig:
     @property
     def dt(self) -> float:
         """Time step size based on CFL condition for both P and S waves."""
-        # Use minimum wave speed to ensure stability for both wave types
-        min_wave_speed = min(self.p_wave_speed, self.s_wave_speed)
-        return self.cfl_safety_factor * self.dx / (min_wave_speed * np.sqrt(2))
+        # Fourth-order second differences have spectral radius 16/(3*h**2).
+        return self.cfl_safety_factor * np.sqrt(3) / (
+            2 * self.p_wave_speed * np.hypot(1 / self.dx, 1 / self.dy)
+        )
 
     @property
     def source_duration(self) -> float:
@@ -105,8 +106,38 @@ class SimulationConfig:
 
     def validate(self) -> None:
         """Validate configuration parameters."""
-        if self.youngs_modulus <= 0:
-            raise ValueError("Young's modulus must be positive")
+        positive = ("youngs_modulus", "density", "dx", "dy", "target_wavelength",
+                    "playback_seconds", "source_duration_cycles", "implicit_tolerance")
+        for name in positive:
+            value = getattr(self, name)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        integers = ("nx", "ny", "steps", "plot_interval", "boundary_width",
+                    "implicit_iterations", "gif_num_steps", "gif_frame_rate", "gif_frame_interval")
+        for name in integers:
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, np.integer)) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        if min(self.nx, self.ny) < 5:
+            raise ValueError("Fourth-order stencils require at least 5 grid points per axis")
+        if not np.isfinite(self.source_amplitude):
+            raise ValueError("source_amplitude must be finite")
+        if not (0 < self.cfl_safety_factor <= 1):
+            raise ValueError("cfl_safety_factor must be in (0, 1]")
+        if not (0 < self.damping <= 1):
+            raise ValueError("damping must be in (0, 1]")
+        if self.finite_diff_order != 4:
+            raise ValueError("Only fourth-order finite differences are supported")
+        if self.source_mode not in ("boundary", "interior"):
+            raise ValueError("source_mode must be 'boundary' or 'interior'")
+        if self.input_mode not in ("radial", "uniform_edge"):
+            raise ValueError("input_mode must be 'radial' or 'uniform_edge'")
+        if self.colorbar_mode not in ("dynamic", "source_amplitude"):
+            raise ValueError("colorbar_mode must be 'dynamic' or 'source_amplitude'")
+        if not (isinstance(self.source_x_start, (int, np.integer))
+                and isinstance(self.source_x_end, (int, np.integer))
+                and 0 <= self.source_x_start < self.source_x_end <= self.nx):
+            raise ValueError("Source columns must satisfy 0 <= start < end <= nx")
         if not (0 <= self.poisson_ratio < 0.5):
             raise ValueError("Poisson's ratio must be in [0, 0.5)")
         if self.poisson_ratio > 0.48:
@@ -117,20 +148,12 @@ class SimulationConfig:
                 "This can cause numerical instability (ill-conditioned Lamé parameters). "
                 "Consider using ν ≤ 0.45 for better stability, or use implicit time integration."
             )
-        if self.density <= 0:
-            raise ValueError("Density must be positive")
-        if self.dx <= 0 or self.dy <= 0:
-            raise ValueError("Grid spacing must be positive")
-        if self.nx <= 0 or self.ny <= 0:
-            raise ValueError("Grid dimensions must be positive")
         if self.boundary_width * 2 >= min(self.nx, self.ny):
             raise ValueError("Boundary width too large for grid size")
         if self.time_integration not in ["explicit", "implicit"]:
             raise ValueError("time_integration must be 'explicit' or 'implicit'")
         if self.boundary_type not in ["fixed", "free_top", "stress_free_all"]:
             raise ValueError("boundary_type must be 'fixed', 'free_top', or 'stress_free_all'")
-        if self.target_wavelength <= 0:
-            raise ValueError("Target wavelength must be positive")
 
     def print_info(self) -> None:
         """Print simulation configuration information."""
@@ -147,7 +170,7 @@ class SimulationConfig:
         )
         print(f"Time step: {self.dt * 1e6:.4f} μs (CFL={self.cfl_safety_factor}, method={self.time_integration})")
         print(
-            f"Boundary: {self.boundary_type} (Rayleigh waves: {'enabled' if self.boundary_type == 'free_top' else 'disabled'})"
+            f"Boundary: {self.boundary_type} (free surface: {'yes' if self.boundary_type != 'fixed' else 'no'})"
         )
         print(
             f"Source: {self.input_freq:.4f} Hz (λ={self.target_wavelength} m), {self.source_amplitude * 1e6:.2f} μm amplitude"

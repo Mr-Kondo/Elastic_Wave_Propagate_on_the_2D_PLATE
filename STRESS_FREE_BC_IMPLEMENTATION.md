@@ -1,165 +1,69 @@
-# Stress-Free Boundary Condition Implementation
+# Free-boundary implementation and limitations
 
-## Overview
-The `apply_stress_free_all()` method in `src/solver.py` has been updated to implement **explicit stress-free boundary conditions** that enforce **σ = 0** at all four boundaries (top, bottom, left, right).
+For the plane-strain displacement field (u, v),
 
-## Previous Implementation (❌ Incomplete)
-- **Method**: Symmetric mirror extension of ghost points
-- **Limitation**: Only enforced zero normal derivatives (∂u/∂n = 0, ∂v/∂n = 0)
-- **Problem**: Did NOT enforce actual stress tensor components = 0
-- **Result**: Head Waves could not form due to incomplete stress-free condition
+$$
+\sigma_{xx}=(\lambda+2\mu)u_x+\lambda v_y,\qquad
+\sigma_{yy}=\lambda u_x+(\lambda+2\mu)v_y,\qquad
+\sigma_{xy}=\mu(u_y+v_x).
+$$
 
-## New Implementation (✅ Corrected)
-- **Method**: Explicit calculation of ghost point values from stress tensor relations
-- **Principle**: For complete stress-free boundary, all stress components must be zero:
-  - **σ_xx = λ(u_x + v_y) + 2μ u_x = 0**
-  - **σ_yy = λ(u_x + v_y) + 2μ v_y = 0**  
-  - **σ_xy = μ(u_y + v_x) = 0**
+A free edge requires **traction** \(\boldsymbol\sigma\mathbf n=0\), not every component of stress to vanish. A horizontal free edge therefore imposes
 
-## Mathematical Approach
+$$
+v_y=-\alpha u_x,\qquad u_y=-v_x,\qquad
+\alpha=\frac{\lambda}{\lambda+2\mu}.
+$$
 
-### Derivation of Ghost Point Values
+A vertical free edge imposes
 
-From the stress-free conditions:
-```
-σ_yy = 0  ⟹  v_y = -λ(u_x + v_y)/(λ + 2μ)  ⟹  v_y = -λu_x/(λ + 2μ)
-σ_xy = 0  ⟹  u_y + v_x = 0  ⟹  u_y = -v_x
-```
+$$
+u_x=-\alpha v_y,\qquad v_x=-u_y.
+$$
 
-For Dirichlet boundary conditions with Taylor expansion:
-```
-φ_ghost = φ_interior - 2Δ * ∂φ/∂n
-```
+## Discretization
 
-where:
-- **φ_ghost**: Displacement component at ghost point
-- **φ_interior**: Displacement at interior boundary point
-- **∂φ/∂n**: Derivative in normal direction (derived from stress condition)
-- **Δ**: Grid spacing (dx or dy)
+`BoundaryConditions.pad_fields` constructs two **exterior** ghost layers for each spatial derivative evaluation. It keeps all physical grid points. Tangential derivatives use central differences on edge interiors and one-sided differences at their endpoints.
 
-### Boundary-Specific Implementation
+For a normal-coordinate derivative g at a boundary, distance kh from it, and k=1,2, the reflected interior node is extended as
 
-**Top and Bottom Boundaries (y-normal):**
-```
-v_y_required = -λ u_x / (λ + 2μ)
-u_y_required = -v_x
+$$
+\phi_{-k}=\phi_k-2khg_0,\qquad
+\phi_{N-1+k}=\phi_{N-1-k}+2khg_{N-1}.
+$$
 
-v_ghost = v_interior ± 2dy * v_y_required
-u_ghost = u_interior ± 2dy * u_y_required
-```
+Opposite sides use the sign of the actual coordinate distance. The two ghost layers use different reflected nodes and distances. This replaces the earlier constant-value overwriting of physical boundary strips. The same coupled traction equations now apply to the top surface of `free_top`.
 
-**Left and Right Boundaries (x-normal):**
-```
-u_x_required = -λ v_y / (λ + 2μ)
-v_x_required = -u_y
+Dirichlet sides use odd reflection around their prescribed boundary value, \(\phi_{-k}=2\phi_0-\phi_k\). Fixed strips are masked in the physical grid. A driven left edge takes precedence at its endpoints. The width of a fixed strip is independent of the two ghost layers.
 
-u_ghost = u_interior ± 2dx * u_x_required
-v_ghost = v_interior ± 2dx * v_x_required
-```
+## Time integration
 
-The sign (±) is determined by the boundary position and normal direction.
+Let L be the acceleration operator. With damping disabled, the explicit recurrence is
 
-## Implementation Details
+$$
+u^{n+1}=2u^n-u^{n-1}+\Delta t^2L(u^n).
+$$
 
-### File Modified
-- **src/solver.py**, lines 236-378
-- **Class**: `BoundaryConditions`
-- **Method**: `apply_stress_free_all()`
+The implicit average-acceleration recurrence uses
 
-### Key Features
-1. **Lamé Parameters**: Uses `config.lame_lambda` and `config.lame_mu` for material properties
-2. **Central Differences**: Computes required derivatives at interior points
-3. **Per-Ghost-Layer**: Iterates through all `bw` (boundary_width = 5) ghost points
-4. **Stress Coefficient**: Calculates `alpha = λ/(λ + 2μ)` for efficient computation
-5. **Source Handling**: Skips left boundary if `source_mode == "boundary"` (driven source)
+$$
+u^{n+1}=2u^n-u^{n-1}
++\frac{\Delta t^2}{4}\left[L(u^{n-1})+2L(u^n)+L(u^{n+1})\right].
+$$
 
-### Algorithm Structure
-```
-For each boundary (TOP, BOTTOM, RIGHT, LEFT):
-  For each ghost layer i from 1 to boundary_width:
-    1. Identify interior and ghost point locations
-    2. Compute spatial derivatives at interior boundary using central differences
-    3. Calculate required derivatives from stress-free conditions
-    4. Compute ghost point values using Taylor expansion
-    5. Update displacement fields
-```
+Both components are coupled through L. Constraints are applied within the fixed-point iteration. Failure to converge raises an error before `state.advance`. The relative maximum-norm convergence test has a floor of four float32 epsilons.
 
-## Expected Physics Outcomes
+For configured velocity retention d, the central velocity-damping discretization replaces the first two terms with \((1+d)u^n-du^{n-1}\), and multiplies the acceleration contribution by \((1+d)/2\). It leaves a static rigid translation unchanged. Prescribed boundary displacement is evaluated at the new time t+dt.
 
-With correct stress-free boundary conditions, the simulator should now exhibit:
+## Verified scope and open work
 
-✅ **Head Wave (Von Schmidt Wave) Formation**
-   - Circular/elliptical patterns in P-wave field
-   - Generated by P-wave reflection at stress-free boundaries
-   - Asymptotic behavior consistent with theoretical predictions
+- Polynomial tests check the fourth-order **interior stencil**, including reuse on different grid sizes.
+- Translation and infinitesimal rigid rotation produce zero strain and approximately zero acceleration.
+- Discrete normal/shear traction residuals on each straight edge are checked **away from corners**.
+- An oscillator verifies second-order time convergence in both integrators.
+- Existing default-material 2000-step runs check finite, bounded displacement; all three boundary modes are also exercised.
+- Actual GIFs are reopened to verify frame count and duration.
 
-✅ **Mode Conversion**
-   - P-waves convert to S-waves at stress-free boundaries
-   - Observable S-wave component growth over time
-   - Stress coupling enables wave mode interactions
+**Limitations:** the edge closure is second order. Corners extend y first and x second; simultaneous corner traction, global convergence order, energy stability for arbitrary materials/grids, reflected-wave amplitudes and Rayleigh/Lamb/Head-wave dispersion are unverified. Corner residuals are observable and are not hidden by the edge test. These limitations remain in [Issue #9](https://github.com/Mr-Kondo/Elastic_Wave_Propagate_on_the_2D_PLATE/issues/9). Passing a smoke test does not establish any of these stronger properties.
 
-✅ **Proper Boundary Behavior**
-   - Stress tensor components ≤ numerical precision at boundaries
-   - No artificial reflections from kinematic-only conditions
-   - Physically correct radiation patterns
-
-## Testing and Validation
-
-### Compilation
-```bash
-python -m py_compile src/solver.py
-# ✓ Compilation successful
-```
-
-### Runtime Verification
-- Simulator initializes without errors
-- Boundary condition method executes during time stepping
-- Numerical integration remains stable (no divergence)
-
-### Physics Validation (To Be Performed)
-1. Run simulation with P-wave source
-2. Observe P-wave propagation and boundary reflection
-3. Check for Head Wave formation patterns
-4. Compare stress field evolution with theory
-5. Verify mode conversion (P→S) at boundaries
-
-## Configuration Parameters
-
-Current simulation setup:
-```
-nx = 101, ny = 20
-dx = 0.009901 m, dy = 0.0095 m
-Domain: 1.0 m × 0.19 m
-
-Material:
-  E = 1000 Pa
-  ν = 0.25  
-  ρ = 1000 kg/m³
-  λ = 250 Pa
-  μ = 400 Pa
-
-Wave Properties:
-  vp ≈ 1.0954 m/s
-  vs ≈ 0.6325 m/s
-  target_wavelength = 0.64 m
-  frequency ≈ 1.71 Hz
-
-Boundary:
-  boundary_type = "stress_free_all"
-  boundary_width = 5 (ghost points per edge)
-  source_mode = "boundary"
-```
-
-## Future Improvements
-
-1. **Higher-Order Taylor Expansion**: Could use multi-layer ghost relationships for improved accuracy
-2. **Adaptive Reflection**: Could implement partial stress-free conditions for specific wave modes
-3. **Boundary Damping**: Could add optional absorbing boundary layers (PML) in addition to stress-free
-4. **Analytical Validation**: Compare computed stress field against analytical solutions for simple geometries
-
-## References
-
-- Navier-Cauchy Equation: Standard elastodynamics formulation
-- Lamé Parameters: Material characterization via Young's modulus and Poisson's ratio
-- Von Schmidt Waves: Head waves generated at stress-free boundaries in elastic media
-- Ghost Point Method: Common approach for Neumann boundary conditions in finite differences
+References: [Bleyer, Linear elasticity](https://bleyerj.github.io/comet-fenicsx/intro/linear_elasticity/linear_elasticity.html), [MOOSE NewmarkBeta](https://raw.githubusercontent.com/idaholab/moose/master/framework/doc/content/source/timeintegrators/NewmarkBeta.md). Neither source validates this particular ghost/corner closure.

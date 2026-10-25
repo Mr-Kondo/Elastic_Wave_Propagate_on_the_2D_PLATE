@@ -54,8 +54,8 @@ class WaveVisualizer:
 
         # Calculate physical extent for correct aspect ratio
         # extent = [left, right, bottom, top] in data coordinates
-        x_extent = self.config.nx * self.config.dx
-        y_extent = self.config.ny * self.config.dy
+        x_extent = (self.config.nx - 1) * self.config.dx
+        y_extent = (self.config.ny - 1) * self.config.dy
         extent = [0, x_extent, 0, y_extent]
 
         # Initialize with dynamic scaling (will be updated each frame)
@@ -70,7 +70,7 @@ class WaveVisualizer:
         )
 
         # Colorbar removed - display area maximized for wave visualization
-        self.title = self.ax.set_title("Elastic Wave Simulation (MLX) - Press 'p' for P-wave, 's' for S-wave")
+        self.title = self.ax.set_title("Elastic Wave Simulation (MLX) - Press 'p' for X, 's' for Y displacement")
 
         # Set axis labels with physical units
         self.ax.set_xlabel("X direction (m)")
@@ -96,39 +96,29 @@ class WaveVisualizer:
                 self._anim.event_source.stop()
             return [self.im]  # Return last frame to keep display
 
-        # Early stopping check (only after minimum steps to allow wave to develop)
-        if self.current_step >= self._min_steps_before_check:
-            max_disp_check = self.state.get_max_displacement()
-
-            # Stop immediately if displacement is nan
-            if np.isnan(max_disp_check):
-                print(f"Wave disappeared (max_disp=nan) at step {self.current_step} - animation stopped")
+        max_disp_check = self.state.get_max_displacement()
+        if not np.isfinite(max_disp_check):
+            raise RuntimeError(f"Non-finite displacement at step {self.current_step}")
+        if (self.current_step >= self._min_steps_before_check
+                and self.current_step * self.config.dt >= self.config.source_duration):
+            self._small_disp_count = self._small_disp_count + 1 if max_disp_check < self._small_disp_threshold else 0
+            if self._small_disp_count >= self._consecutive_frames_needed:
+                print(f"Wave negligible at step {self.current_step} - animation stopped")
                 if self._anim is not None:
                     self._anim.event_source.stop()
                 return [self.im]
 
-            # Count consecutive frames with negligible displacement
-            if max_disp_check < self._small_disp_threshold:
-                self._small_disp_count += 1
-                if self._small_disp_count >= self._consecutive_frames_needed:
-                    print(
-                        f"Wave negligible (max_disp={max_disp_check:.3e}) for {self._small_disp_count} frames at step {self.current_step} - animation stopped"
-                    )
-                    if self._anim is not None:
-                        self._anim.event_source.stop()
-                    return [self.im]
-            else:
-                # Reset counter if displacement becomes significant again
-                self._small_disp_count = 0
-
         # Run multiple time steps per frame
-        for i in range(self.config.plot_interval):
+        for _ in range(min(self.config.plot_interval, self.config.steps - self.current_step)):
             t = self.current_step * self.config.dt
 
             # Advance simulation
             self.solver.step(self.state, t)
 
-            # Check for instability (warning only - simulation continues)
+            if not np.isfinite(self.state.get_max_displacement()):
+                raise RuntimeError(f"Non-finite displacement at step {self.current_step + 1}")
+
+            # Finite large amplitudes are a diagnostic, not proof of instability.
             if self.solver.check_stability(self.state):
                 print(f"Warning: Large displacement detected at step {self.current_step} (continuing simulation)")
 
@@ -156,7 +146,7 @@ class WaveVisualizer:
             fixed_vmin = -fixed_vmax
         else:
             # Fixed scaling: based on source amplitude (default)
-            fixed_vmax = self.config.source_amplitude * 1.15
+            fixed_vmax = max(abs(self.config.source_amplitude) * 1.15, 1e-12)
             fixed_vmin = -fixed_vmax
         self.im.set_clim(vmin=fixed_vmin, vmax=fixed_vmax)
 
@@ -167,7 +157,11 @@ class WaveVisualizer:
 
         # Plot contour lines at key levels to visualize wave crests/troughs
         levels = np.linspace(fixed_vmin, fixed_vmax, 31)  # 31 contour levels (detailed wave structure)
-        self.ax.contour(disp_np, levels=levels, colors="gray", alpha=0.3, linewidths=0.5, origin="lower")
+        self.ax.contour(
+            np.arange(self.config.nx) * self.config.dx,
+            np.arange(self.config.ny) * self.config.dy,
+            disp_np, levels=levels, colors="gray", alpha=0.3, linewidths=0.5,
+        )
 
         # Update image data
         self.im.set_data(disp_np)
@@ -178,14 +172,14 @@ class WaveVisualizer:
         # Always use display_mode for current view (supports both fixed and interactive modes)
         source_label = "boundary input" if self.config.source_mode == "boundary" else "internal source"
         if self.state.display_mode == "P":
-            wave_label = f"P-wave (X-displacement, {source_label})"
+            wave_label = f"X-displacement ({source_label})"
         elif self.state.display_mode == "S":
-            wave_label = f"S-wave (Y-displacement, mode conversion)"
+            wave_label = "Y-displacement"
         else:
-            wave_label = f"Combined (magnitude of P+S)"
+            wave_label = "Displacement magnitude"
 
         t_current = self.current_step * self.config.dt
-        stability_status = " [UNSTABLE!]" if max_disp > 1e-3 else ""
+        stability_status = " [CHECK AMPLITUDE/FINITE VALUES]" if self.solver.check_stability(self.state) else ""
         self.title.set_text(
             f"{wave_label} | Step: {self.current_step:4d} | Time: {t_current * 1e3:6.2f} ms | Max displacement: {max_disp:.3e} m{stability_status}"
         )
@@ -203,11 +197,11 @@ class WaveVisualizer:
         if event.key == "p":
             if self.state.display_mode != "P":
                 self.state.set_display_mode("P")
-                print("Display switched to P-wave (X-displacement, compressional)")
+                print("Display switched to X-displacement")
         elif event.key == "s":
             if self.state.display_mode != "S":
                 self.state.set_display_mode("S")
-                print("Display switched to S-wave (Y-displacement, shear from mode conversion)")
+                print("Display switched to Y-displacement")
         elif event.key == "b":
             if self.state.display_mode != "Both":
                 self.state.set_display_mode("Both")
@@ -217,7 +211,7 @@ class WaveVisualizer:
         """Run the animation."""
         print("Starting simulation...")
 
-        total_frames = self.config.steps // self.config.plot_interval
+        total_frames = (self.config.steps + self.config.plot_interval - 1) // self.config.plot_interval
         interval_ms = max(1, int(1000 * self.config.playback_seconds / max(1, total_frames)))
 
         self._anim = FuncAnimation(

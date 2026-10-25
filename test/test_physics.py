@@ -1,38 +1,27 @@
-#!/usr/bin/env python
-"""Test physical correctness of wave polarization."""
+"""Source polarization geometry; this does not validate propagated wave modes."""
+
+import sys
+import unittest
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
+from config import SimulationConfig
 from solver import BoundaryConditions
 
-# Test boundary condition implementation
-bc = BoundaryConditions(nx=100, ny=100, boundary_width=5, boundary_type="free_top")
 
-print("✓ Point source polarization:")
-print(f"  P-wave source shape: {bc.source_p_u.shape}")
-print(f"  S-wave source shape: {bc.source_s_u.shape}")
+class PolarizationTests(unittest.TestCase):
+    def test_active_source_directions_in_physical_coordinates(self):
+        config = SimulationConfig(nx=25, ny=17, dx=0.03, dy=0.01, source_x_start=6, source_x_end=8)
+        bc = BoundaryConditions(config.nx, config.ny, source_x_start=6, source_x_end=8, config=config)
+        for y, x in ((8, 6), (8, 7), (10, 7), (6, 7)):
+            p = np.array([bc.source_p_u[0, y, x, 0].item(), bc.source_p_v[0, y, x, 0].item()])
+            s = np.array([bc.source_s_u[0, y, x, 0].item(), bc.source_s_v[0, y, x, 0].item()])
+            radial = np.array([(x-6.5)*config.dx, (y-8)*config.dy])
+            np.testing.assert_allclose(p, radial/np.linalg.norm(radial), atol=1e-7)
+            self.assertAlmostEqual(float(np.dot(p, s)), 0, places=6)
+            self.assertAlmostEqual(float(np.linalg.norm(s)), 1, places=6)
 
-# Verify orthogonality at test points
-test_points = [(50, 10), (50, 7), (60, 7), (40, 7)]
 
-for test_idx_y, test_idx_x in test_points:
-    p_u = float(bc.source_p_u[0, test_idx_y, test_idx_x, 0])
-    p_v = float(bc.source_p_v[0, test_idx_y, test_idx_x, 0])
-    s_u = float(bc.source_s_u[0, test_idx_y, test_idx_x, 0])
-    s_v = float(bc.source_s_v[0, test_idx_y, test_idx_x, 0])
-
-    dot_product = p_u * s_u + p_v * s_v
-    p_norm = np.sqrt(p_u**2 + p_v**2)
-    s_norm = np.sqrt(s_u**2 + s_v**2)
-
-    print(f"\n  Test point ({test_idx_y},{test_idx_x}):")
-    print(f"    P-wave: ({p_u:.4f}, {p_v:.4f}), norm={p_norm:.4f}")
-    print(f"    S-wave: ({s_u:.4f}, {s_v:.4f}), norm={s_norm:.4f}")
-    print(f"    Dot product (orthogonality): {dot_product:.8f}")
-
-    if abs(dot_product) < 1e-6 and abs(p_norm - s_norm) < 1e-6:
-        print(f"    ✓ Orthogonal and normalized")
-    else:
-        print(f"    ⚠ Warning: dot={dot_product:.2e}, norm_diff={abs(p_norm - s_norm):.2e}")
-
-print("\n✓ Physics test completed!")
-print("✓ P-wave (radial) and S-wave (tangential) are orthogonal")
+if __name__ == "__main__":
+    unittest.main()

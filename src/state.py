@@ -92,9 +92,9 @@ class WaveFieldState:
         Returns:
             Maximum displacement magnitude
         """
-        max_u = mx.max(mx.abs(self.u)).item()
-        max_v = mx.max(mx.abs(self.v)).item()
-        return max(max_u, max_v)
+        max_u = mx.max(mx.abs(self.u))
+        max_v = mx.max(mx.abs(self.v))
+        return mx.maximum(max_u, max_v).item()
 
     def reset(self) -> None:
         """Reset all fields to zero."""
