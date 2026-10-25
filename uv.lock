@@ -79,7 +79,7 @@ wheels = [
 
 [[package]]
 name = "elastic-wave-propagate-on-the-2d-plate"
-version = "0.3.0"
+version = "0.3.1"
 source = { virtual = "." }
 dependencies = [
     { name = "matplotlib" },

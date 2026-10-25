@@ -136,7 +136,7 @@ class GifExporter:
             raise RuntimeError(f"Non-finite displacement at step {self.current_step}")
 
         # Combined magnitude
-        combined_np = np.sqrt(u_np**2 + v_np**2)
+        combined_np = np.hypot(u_np, v_np)
 
         return u_np, v_np, combined_np
 

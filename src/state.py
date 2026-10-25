@@ -63,7 +63,7 @@ class WaveFieldState:
             return self.v
         else:  # Both
             # Show combined magnitude: sqrt(u^2 + v^2)
-            return np.sqrt(self.u**2 + self.v**2)
+            return np.hypot(self.u, self.v)
 
     def set_wave_type(self, wave_type: WaveType) -> None:
         """
@@ -92,9 +92,7 @@ class WaveFieldState:
         Returns:
             Maximum displacement magnitude
         """
-        max_u = np.max(np.abs(self.u))
-        max_v = np.max(np.abs(self.v))
-        return np.maximum(max_u, max_v).item()
+        return np.max(np.hypot(self.u, self.v)).item()
 
     def reset(self) -> None:
         """Reset all fields to zero."""

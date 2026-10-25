@@ -18,6 +18,7 @@ from config import SimulationConfig
 from gif_exporter import GifExporter
 from main import _initialize_simulation
 from solver import ElasticOperator
+from state import WaveFieldState
 from visualizer import WaveVisualizer
 
 
@@ -148,6 +149,21 @@ class NumericalTests(unittest.TestCase):
 class OutputTests(unittest.TestCase):
     def tearDown(self):
         plt.close("all")
+
+    def test_magnitude_is_euclidean_and_does_not_square_extreme_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = SimulationConfig(nx=2, ny=2, gif_output_dir=directory)
+            state = WaveFieldState(2, 2)
+            exporter = GifExporter(config, state, None)
+            state.set_display_mode("Both")
+            for scale in (1., 1e200, 1e-200):
+                with self.subTest(scale=scale):
+                    state.u.fill(3*scale)
+                    state.v.fill(4*scale)
+                    expected = 5*scale
+                    np.testing.assert_allclose(state.get_display_field(), expected, rtol=1e-14, atol=0)
+                    np.testing.assert_allclose(exporter._collect_frame_data()[2], expected, rtol=1e-14, atol=0)
+                    np.testing.assert_allclose(state.get_max_displacement(), expected, rtol=1e-14, atol=0)
 
     def test_nonfinite_outputs_fail_and_active_source_does_not_stop_early(self):
         config = SimulationConfig(time_integration="explicit", source_amplitude=0)
