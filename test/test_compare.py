@@ -63,6 +63,19 @@ class CompareTests(unittest.TestCase):
             ):
                 self.assertFalse(_can_encode_mp4())
 
+    def test_runs_when_notebook_sets_inline_backend(self):
+        import os
+        import subprocess
+        import tempfile
+
+        env = {**os.environ, "MPLBACKEND": "module://matplotlib_inline.backend_inline"}
+        with tempfile.TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "run_compare.py"), "--steps", "2", "--out", str(Path(tmp) / "c")],
+                env=env, capture_output=True, text=True, check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_rejects_non_positive_arguments(self):
         for flag in ("--steps", "--frame-interval", "--fps"):
             with self.subTest(flag=flag), self.assertRaises(SystemExit):
