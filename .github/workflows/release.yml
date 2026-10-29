@@ -1,0 +1,28 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Create tag and release from VERSION
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="v${version}"
+          notes="docs/release-notes/${tag}.md"
+          test -f "$notes" || { echo "missing $notes"; exit 1; }
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "$tag already released"; exit 0
+          fi
+          git archive --prefix="elastic-wave-${tag}/" -o "elastic-wave-${tag}.zip" HEAD
+          gh release create "$tag" "elastic-wave-${tag}.zip" --target "$GITHUB_SHA" --title "$tag" --notes-file "$notes"

@@ -53,6 +53,14 @@ The default source stays active for the whole default run. `source_mode="interio
 
 The full admissible material range remains `0 <= poisson_ratio < 0.5`. B-bar mitigates volumetric locking; near incompressibility still demands sufficient resolution and floating-point conditioning. The validation includes ν=0.4999 and does not model the exactly incompressible limit.
 
+## Compare in Colab
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Mr-Kondo/Elastic_Wave_Propagate_on_the_2D_PLATE/blob/main/notebooks/colab_compare.ipynb)
+
+`notebooks/colab_compare.ipynb` clones this repository, builds the locked Python 3.14 environment with `uv`, runs the simulations in a background process and shows one video with the cases stacked on a shared colour scale. Pick `boundaries`, `poisson` or `integrators` and the step count in the settings cell; `REF` selects a branch or release tag.
+
+The same entry point runs locally, headless: `uv run python run_compare.py --preset boundaries --out feedback/compare` writes an mp4 (a GIF if `ffmpeg` is missing). Options: `--preset`, `--steps`, `--frame-interval`, `--fps`, `--out`. The preset cases live in `src/compare.py`.
+
 ## Output
 
 - **p**: x-displacement; **s**: y-displacement; **b**: magnitude.
