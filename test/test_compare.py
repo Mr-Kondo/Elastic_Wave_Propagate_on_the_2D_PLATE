@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np
 
-from compare import PRESETS, _can_encode_mp4, main, run_case
+from compare import PRESETS, _can_encode_mp4, main, parse_case, run_case
 from config import SimulationConfig
 
 
@@ -75,6 +75,29 @@ class CompareTests(unittest.TestCase):
                 env=env, capture_output=True, text=True, check=False,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_parse_case_types_values_like_config(self):
+        import argparse
+
+        base = SimulationConfig()
+        name, overrides = parse_case("soft:poisson_ratio=0.4,boundary_type=fixed,boundary_width=3", base)
+        self.assertEqual(name, "soft")
+        self.assertEqual(overrides, {"poisson_ratio": 0.4, "boundary_type": "fixed", "boundary_width": 3})
+        for bad in ("x:nope=1", "x:poisson_ratio=abc", ":poisson_ratio=0.3", "x:poisson_ratio"):
+            with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
+                parse_case(bad, base)
+
+    def test_bad_case_is_an_argument_error(self):
+        with self.assertRaises(SystemExit):
+            main(["--case", "x:nope=1"])
+
+    def test_custom_cases_replace_preset(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = main(["--steps", "4", "--case", "a:poisson_ratio=0.3", "--case", "b:boundary_type=fixed",
+                        "--out", str(Path(tmp) / "c")])
+            self.assertGreater(out.stat().st_size, 0)
 
     def test_rejects_non_positive_arguments(self):
         for flag in ("--steps", "--frame-interval", "--fps"):

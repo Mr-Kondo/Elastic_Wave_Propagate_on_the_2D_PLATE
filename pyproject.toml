@@ -1,6 +1,6 @@
 [project]
 name = "elastic-wave-propagate-on-the-2d-plate"
-version = "0.4.1"
+version = "0.5.0"
 description = "Energy-form 2D elastic wave simulation"
 readme = "README.md"
 requires-python = ">=3.14"

@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 # Force Agg: notebook kernels (Colab) export MPLBACKEND=module://matplotlib_inline..., which this venv lacks.
@@ -83,6 +83,8 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
     axes[-1, 0].set_xlabel("x (m)")
     fig.colorbar(images[0], ax=axes[:, 0].tolist(), label="|u| (m)")
     label = fig.suptitle("")
+    fig.canvas.draw()  # solve the layout once, then freeze it: re-solving every frame took half the render time
+    fig.set_layout_engine("none")
 
     def update(i):
         for im, name in zip(images, names):
@@ -104,6 +106,23 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
     return out
 
 
+def parse_case(text: str, base: SimulationConfig) -> tuple[str, dict]:
+    """Parse 'name:key=value,key=value' into (name, overrides) with values typed like the base config."""
+    name, _, pairs = text.partition(":")
+    known = {f.name for f in fields(base)}
+    overrides = {}
+    for pair in filter(None, pairs.split(",")):
+        key, eq, raw = pair.partition("=")
+        if not name or not eq or key not in known:
+            raise argparse.ArgumentTypeError(f"bad --case {text!r}: expected name:key=value with a SimulationConfig field")
+        current = getattr(base, key)
+        try:
+            overrides[key] = current if isinstance(current, bool) and raw == str(current) else type(current)(raw)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"bad value for {key} in {text!r}: {exc}") from None
+    return name, overrides
+
+
 def _positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -114,6 +133,8 @@ def _positive_int(text: str) -> int:
 def main(argv=None) -> Path:
     parser = argparse.ArgumentParser(description="Compare simulation cases side by side (headless).")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="boundaries")
+    parser.add_argument("--case", action="append", default=[], metavar="NAME:KEY=VALUE,...",
+                        help="custom case (repeatable); replaces --preset, e.g. soft:poisson_ratio=0.4,boundary_type=fixed")
     parser.add_argument("--steps", type=_positive_int, default=560)
     parser.add_argument("--frame-interval", type=_positive_int, default=2)
     parser.add_argument("--fps", type=_positive_int, default=20)
@@ -121,8 +142,12 @@ def main(argv=None) -> Path:
     args = parser.parse_args(argv)
 
     base = SimulationConfig()
+    try:
+        custom = dict(parse_case(text, base) for text in args.case)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
     cases = {}
-    for name, overrides in PRESETS[args.preset].items():
+    for name, overrides in (custom or PRESETS[args.preset]).items():
         start = time.perf_counter()
         print(f"[{name}] running {args.steps} steps ...", flush=True)
         cases[name] = run_case(replace(base, **overrides), args.steps, args.frame_interval)
