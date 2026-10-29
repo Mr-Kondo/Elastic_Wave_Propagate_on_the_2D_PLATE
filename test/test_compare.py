@@ -42,12 +42,26 @@ class CompareTests(unittest.TestCase):
 
         with mock.patch("shutil.which", return_value=None):
             self.assertFalse(_can_encode_mp4())
-        for listing, expected in (("V..... libx264", True), ("V..... mpeg4", False)):
+        ok = SimpleNamespace(returncode=0, stdout="V..... libx264")
+        cases = (
+            (ok, True),
+            (SimpleNamespace(returncode=0, stdout="V..... mpeg4"), False),
+            (SimpleNamespace(returncode=1, stdout="V..... libx264"), False),
+        )
+        for result, expected in cases:
             with (
                 mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"),
-                mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=listing)),
+                mock.patch("subprocess.run", return_value=result),
             ):
                 self.assertEqual(_can_encode_mp4(), expected)
+        import subprocess
+
+        for error in (OSError("bad exe"), subprocess.TimeoutExpired("ffmpeg", 10)):
+            with (
+                mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+                mock.patch("subprocess.run", side_effect=error),
+            ):
+                self.assertFalse(_can_encode_mp4())
 
     def test_rejects_non_positive_arguments(self):
         for flag in ("--steps", "--frame-interval", "--fps"):

@@ -60,8 +60,12 @@ def _can_encode_mp4() -> bool:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return False
-    listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, check=False)
-    return "libx264" in listing.stdout
+    try:
+        listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                                 check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return listing.returncode == 0 and "libx264" in listing.stdout
 
 
 def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
