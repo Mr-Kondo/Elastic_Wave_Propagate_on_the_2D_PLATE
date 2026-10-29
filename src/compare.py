@@ -7,6 +7,7 @@ that stacks the displacement-magnitude fields on a shared colour scale.
 import argparse
 import os
 import shutil
+import subprocess
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -54,6 +55,19 @@ def run_case(config: SimulationConfig, steps: int, frame_interval: int) -> np.nd
     return np.stack(frames)
 
 
+def _can_encode_mp4() -> bool:
+    """True only if ffmpeg exists and was built with libx264 (else fall back to GIF)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    try:
+        listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                                 check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return listing.returncode == 0 and "libx264" in listing.stdout
+
+
 def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
     """Write the stacked comparison; returns the file written (.mp4, or .gif without ffmpeg)."""
     names = list(cases)
@@ -78,7 +92,7 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
 
     nframes = len(next(iter(cases.values())))
     anim = animation.FuncAnimation(fig, update, frames=nframes)
-    if shutil.which("ffmpeg"):
+    if _can_encode_mp4():
         out = out.with_suffix(".mp4")
         writer = animation.FFMpegWriter(fps=fps, codec="libx264", extra_args=["-pix_fmt", "yuv420p"])
     else:
