@@ -5,14 +5,14 @@ that stacks the displacement-magnitude fields on a shared colour scale.
 """
 
 import argparse
+import os
 import shutil
 import time
 from dataclasses import replace
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
+# Force Agg: notebook kernels (Colab) export MPLBACKEND=module://matplotlib_inline..., which this venv lacks.
+os.environ["MPLBACKEND"] = "Agg"
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import animation
