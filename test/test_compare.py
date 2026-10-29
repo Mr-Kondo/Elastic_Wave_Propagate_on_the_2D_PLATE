@@ -42,12 +42,12 @@ class CompareTests(unittest.TestCase):
                 main([flag, "0"])
 
     def test_version_matches_pyproject(self):
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-        self.assertEqual((ROOT / "VERSION").read_text().strip(), project["version"])
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        self.assertEqual((ROOT / "VERSION").read_text(encoding="utf-8").strip(), project["version"])
         self.assertTrue((ROOT / "docs" / "release-notes" / f"v{project['version']}.md").exists())
 
     def test_notebook_runs_existing_entry_point(self):
-        nb = json.loads((ROOT / "notebooks" / "colab_compare.ipynb").read_text())
+        nb = json.loads((ROOT / "notebooks" / "colab_compare.ipynb").read_text(encoding="utf-8"))
         code = "".join("".join(c["source"]) for c in nb["cells"] if c["cell_type"] == "code")
         compile(code.replace("#@param", "#"), "notebook", "exec")
         self.assertIn("run_compare.py", code)
