@@ -68,15 +68,16 @@ def _can_encode_mp4() -> bool:
     return listing.returncode == 0 and "libx264" in listing.stdout
 
 
-def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
+def render(cases: dict, configs: dict, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
     """Write the stacked comparison; returns the file written (.mp4, or .gif without ffmpeg)."""
     names = list(cases)
     vmax = max(float(f.max()) for f in cases.values()) or 1e-12  # shared scale makes cases comparable
-    extent = (0, (config.nx - 1) * config.dx, 0, (config.ny - 1) * config.dy)
     fig, axes = plt.subplots(len(names), 1, figsize=(8, 2.4 * len(names)), dpi=100, squeeze=False,
                              constrained_layout=True)
     images = []
     for ax, name in zip(axes[:, 0], names):
+        config = configs[name]  # each case may have its own grid
+        extent = (0, (config.nx - 1) * config.dx, 0, (config.ny - 1) * config.dy)
         images.append(ax.imshow(cases[name][0], origin="lower", extent=extent, vmin=0, vmax=vmax, cmap="viridis"))
         ax.set_title(name, fontsize=10)
         ax.set_ylabel("y (m)")
@@ -106,18 +107,29 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
     return out
 
 
+def _parse_bool(raw: str) -> bool:
+    lowered = raw.lower()
+    if lowered not in ("true", "false"):
+        raise ValueError(f"expected true or false, got {raw!r}")
+    return lowered == "true"
+
+
 def parse_case(text: str, base: SimulationConfig) -> tuple[str, dict]:
     """Parse 'name:key=value,key=value' into (name, overrides) with values typed like the base config."""
-    name, _, pairs = text.partition(":")
+    name, colon, pairs = text.partition(":")
+    bad = argparse.ArgumentTypeError(f"bad --case {text!r}: expected name:key=value[,key=value] with SimulationConfig fields")
+    if not name or not colon or not pairs:
+        raise bad
     known = {f.name for f in fields(base)}
     overrides = {}
-    for pair in filter(None, pairs.split(",")):
+    for pair in pairs.split(","):
         key, eq, raw = pair.partition("=")
-        if not name or not eq or key not in known:
-            raise argparse.ArgumentTypeError(f"bad --case {text!r}: expected name:key=value with a SimulationConfig field")
+        if not eq or key not in known:
+            raise bad
         current = getattr(base, key)
+        convert = _parse_bool if isinstance(current, bool) else type(current)
         try:
-            overrides[key] = current if isinstance(current, bool) and raw == str(current) else type(current)(raw)
+            overrides[key] = convert(raw)
         except ValueError as exc:
             raise argparse.ArgumentTypeError(f"bad value for {key} in {text!r}: {exc}") from None
     return name, overrides
@@ -143,16 +155,21 @@ def main(argv=None) -> Path:
 
     base = SimulationConfig()
     try:
-        custom = dict(parse_case(text, base) for text in args.case)
+        parsed = [parse_case(text, base) for text in args.case]
+        names = [name for name, _ in parsed]
+        if len(set(names)) != len(names):
+            raise argparse.ArgumentTypeError(f"duplicate --case names: {names}")
+        custom = dict(parsed)
     except argparse.ArgumentTypeError as exc:
         parser.error(str(exc))
-    cases = {}
+    cases, configs = {}, {}
     for name, overrides in (custom or PRESETS[args.preset]).items():
+        configs[name] = replace(base, **overrides)
         start = time.perf_counter()
         print(f"[{name}] running {args.steps} steps ...", flush=True)
-        cases[name] = run_case(replace(base, **overrides), args.steps, args.frame_interval)
+        cases[name] = run_case(configs[name], args.steps, args.frame_interval)
         print(f"[{name}] done in {time.perf_counter() - start:.1f} s", flush=True)
     print("rendering video ...", flush=True)
-    out = render(cases, base, args.steps, args.frame_interval, args.fps, args.out)
+    out = render(cases, configs, args.steps, args.frame_interval, args.fps, args.out)
     print(f"wrote {out}", flush=True)
     return out

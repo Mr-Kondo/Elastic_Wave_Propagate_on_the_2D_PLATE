@@ -4,6 +4,7 @@ import json
 import sys
 import tomllib
 import unittest
+import unittest.mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,13 +84,44 @@ class CompareTests(unittest.TestCase):
         name, overrides = parse_case("soft:poisson_ratio=0.4,boundary_type=fixed,boundary_width=3", base)
         self.assertEqual(name, "soft")
         self.assertEqual(overrides, {"poisson_ratio": 0.4, "boundary_type": "fixed", "boundary_width": 3})
-        for bad in ("x:nope=1", "x:poisson_ratio=abc", ":poisson_ratio=0.3", "x:poisson_ratio"):
+        self.assertEqual(parse_case("x:gif_export=FALSE", base)[1], {"gif_export": False})
+        self.assertEqual(parse_case("x:gif_export=true", base)[1], {"gif_export": True})
+        for bad in ("x:nope=1", "x:poisson_ratio=abc", ":poisson_ratio=0.3", "x:poisson_ratio", "", ":", "x",
+                    "x:", "x:,,", "x:poisson_ratio=0.3,", "x:gif_export=garbage"):
             with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
                 parse_case(bad, base)
 
     def test_bad_case_is_an_argument_error(self):
         with self.assertRaises(SystemExit):
             main(["--case", "x:nope=1"])
+
+    def test_duplicate_case_names_are_rejected(self):
+        with self.assertRaises(SystemExit):
+            main(["--case", "x:poisson_ratio=0.3", "--case", "x:poisson_ratio=0.4"])
+
+    def test_render_uses_each_cases_own_geometry(self):
+        import tempfile
+        from dataclasses import replace
+
+        import matplotlib.pyplot as plt
+
+        from compare import render
+
+        configs = {"default": SimulationConfig(), "big": replace(SimulationConfig(), nx=21, dx=0.2)}
+        cases = {n: run_case(c, steps=2, frame_interval=1) for n, c in configs.items()}
+        seen = []
+        original = plt.subplots
+
+        def spy(*args, **kwargs):
+            fig, axes = original(*args, **kwargs)
+            seen.append(axes)
+            return fig, axes
+
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch("matplotlib.pyplot.subplots", spy):
+            render(cases, configs, 2, 1, 5, Path(tmp) / "c")
+        extents = [ax.images[0].get_extent() for ax in seen[0][:, 0]]
+        self.assertAlmostEqual(extents[0][1], 100 * SimulationConfig().dx)
+        self.assertAlmostEqual(extents[1][1], 20 * 0.2)
 
     def test_custom_cases_replace_preset(self):
         import tempfile
