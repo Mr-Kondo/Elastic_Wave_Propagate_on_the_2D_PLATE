@@ -59,7 +59,7 @@ The full admissible material range remains `0 <= poisson_ratio < 0.5`. B-bar mit
 
 `notebooks/colab_compare.ipynb` clones this repository, builds the locked Python 3.14 environment with `uv`, runs the simulations in a background process and shows one video with the cases stacked on a shared colour scale. Pick `boundaries`, `poisson` or `integrators` and the step count in the settings cell; `REF` selects a branch or release tag and defaults to the latest release; raise it in `notebooks/colab_compare.ipynb` whenever a release is cut.
 
-The same entry point runs locally, headless: `uv run python run_compare.py --preset boundaries --out feedback/compare` writes an mp4 (a GIF if `ffmpeg` is missing). Options: `--preset`, `--steps`, `--frame-interval`, `--fps`, `--out`. The preset cases live in `src/compare.py`.
+The same entry point runs locally, headless: `uv run python run_compare.py --preset boundaries --out feedback/compare` writes an mp4 (a GIF if `ffmpeg` is missing or lacks `libx264`). Options: `--preset`, `--case`, `--steps`, `--frame-interval`, `--fps`, `--out`. The preset cases live in `src/compare.py`. `--case "soft:poisson_ratio=0.4,boundary_type=fixed"` (repeatable; field names of `SimulationConfig`) replaces the preset with your own cases; the notebook has a matching `CASES` field (`;`-separated).
 
 ## Output
 

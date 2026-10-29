@@ -9,7 +9,7 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
 # Force Agg: notebook kernels (Colab) export MPLBACKEND=module://matplotlib_inline..., which this venv lacks.
@@ -68,21 +68,24 @@ def _can_encode_mp4() -> bool:
     return listing.returncode == 0 and "libx264" in listing.stdout
 
 
-def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
+def render(cases: dict, configs: dict, steps: int, frame_interval: int, fps: int, out: Path) -> Path:
     """Write the stacked comparison; returns the file written (.mp4, or .gif without ffmpeg)."""
     names = list(cases)
     vmax = max(float(f.max()) for f in cases.values()) or 1e-12  # shared scale makes cases comparable
-    extent = (0, (config.nx - 1) * config.dx, 0, (config.ny - 1) * config.dy)
     fig, axes = plt.subplots(len(names), 1, figsize=(8, 2.4 * len(names)), dpi=100, squeeze=False,
                              constrained_layout=True)
     images = []
     for ax, name in zip(axes[:, 0], names):
+        config = configs[name]  # each case may have its own grid
+        extent = (0, (config.nx - 1) * config.dx, 0, (config.ny - 1) * config.dy)
         images.append(ax.imshow(cases[name][0], origin="lower", extent=extent, vmin=0, vmax=vmax, cmap="viridis"))
         ax.set_title(name, fontsize=10)
         ax.set_ylabel("y (m)")
     axes[-1, 0].set_xlabel("x (m)")
     fig.colorbar(images[0], ax=axes[:, 0].tolist(), label="|u| (m)")
     label = fig.suptitle("")
+    fig.canvas.draw()  # solve the layout once, then freeze it: re-solving every frame took half the render time
+    fig.set_layout_engine("none")
 
     def update(i):
         for im, name in zip(images, names):
@@ -104,6 +107,34 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
     return out
 
 
+def _parse_bool(raw: str) -> bool:
+    lowered = raw.lower()
+    if lowered not in ("true", "false"):
+        raise ValueError(f"expected true or false, got {raw!r}")
+    return lowered == "true"
+
+
+def parse_case(text: str, base: SimulationConfig) -> tuple[str, dict]:
+    """Parse 'name:key=value,key=value' into (name, overrides) with values typed like the base config."""
+    name, colon, pairs = text.partition(":")
+    bad = argparse.ArgumentTypeError(f"bad --case {text!r}: expected name:key=value[,key=value] with SimulationConfig fields")
+    if not name or not colon or not pairs:
+        raise bad
+    known = {f.name for f in fields(base)}
+    overrides = {}
+    for pair in pairs.split(","):
+        key, eq, raw = pair.partition("=")
+        if not eq or key not in known:
+            raise bad
+        current = getattr(base, key)
+        convert = _parse_bool if isinstance(current, bool) else type(current)
+        try:
+            overrides[key] = convert(raw)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(f"bad value for {key} in {text!r}: {exc}") from None
+    return name, overrides
+
+
 def _positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -114,6 +145,8 @@ def _positive_int(text: str) -> int:
 def main(argv=None) -> Path:
     parser = argparse.ArgumentParser(description="Compare simulation cases side by side (headless).")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="boundaries")
+    parser.add_argument("--case", action="append", default=[], metavar="NAME:KEY=VALUE,...",
+                        help="custom case (repeatable); replaces --preset, e.g. soft:poisson_ratio=0.4,boundary_type=fixed")
     parser.add_argument("--steps", type=_positive_int, default=560)
     parser.add_argument("--frame-interval", type=_positive_int, default=2)
     parser.add_argument("--fps", type=_positive_int, default=20)
@@ -121,13 +154,22 @@ def main(argv=None) -> Path:
     args = parser.parse_args(argv)
 
     base = SimulationConfig()
-    cases = {}
-    for name, overrides in PRESETS[args.preset].items():
+    try:
+        parsed = [parse_case(text, base) for text in args.case]
+        names = [name for name, _ in parsed]
+        if len(set(names)) != len(names):
+            raise argparse.ArgumentTypeError(f"duplicate --case names: {names}")
+        custom = dict(parsed)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+    cases, configs = {}, {}
+    for name, overrides in (custom or PRESETS[args.preset]).items():
+        configs[name] = replace(base, **overrides)
         start = time.perf_counter()
         print(f"[{name}] running {args.steps} steps ...", flush=True)
-        cases[name] = run_case(replace(base, **overrides), args.steps, args.frame_interval)
+        cases[name] = run_case(configs[name], args.steps, args.frame_interval)
         print(f"[{name}] done in {time.perf_counter() - start:.1f} s", flush=True)
     print("rendering video ...", flush=True)
-    out = render(cases, base, args.steps, args.frame_interval, args.fps, args.out)
+    out = render(cases, configs, args.steps, args.frame_interval, args.fps, args.out)
     print(f"wrote {out}", flush=True)
     return out
