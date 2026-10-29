@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import numpy as np
 
-from compare import PRESETS, main, run_case
+from compare import PRESETS, _can_encode_mp4, main, run_case
 from config import SimulationConfig
 
 
@@ -35,6 +35,19 @@ class CompareTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = main(["--steps", "6", "--out", str(Path(tmp) / "c")])
             self.assertGreater(out.stat().st_size, 0)
+
+    def test_mp4_needs_ffmpeg_with_libx264(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        with mock.patch("shutil.which", return_value=None):
+            self.assertFalse(_can_encode_mp4())
+        for listing, expected in (("V..... libx264", True), ("V..... mpeg4", False)):
+            with (
+                mock.patch("shutil.which", return_value="/usr/bin/ffmpeg"),
+                mock.patch("subprocess.run", return_value=SimpleNamespace(stdout=listing)),
+            ):
+                self.assertEqual(_can_encode_mp4(), expected)
 
     def test_rejects_non_positive_arguments(self):
         for flag in ("--steps", "--frame-interval", "--fps"):
