@@ -36,6 +36,11 @@ class CompareTests(unittest.TestCase):
             out = main(["--steps", "6", "--out", str(Path(tmp) / "c")])
             self.assertGreater(out.stat().st_size, 0)
 
+    def test_rejects_non_positive_arguments(self):
+        for flag in ("--steps", "--frame-interval", "--fps"):
+            with self.subTest(flag=flag), self.assertRaises(SystemExit):
+                main([flag, "0"])
+
     def test_version_matches_pyproject(self):
         project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
         self.assertEqual((ROOT / "VERSION").read_text().strip(), project["version"])

@@ -90,12 +90,19 @@ def render(cases: dict, config: SimulationConfig, steps: int, frame_interval: in
     return out
 
 
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {text}")
+    return value
+
+
 def main(argv=None) -> Path:
     parser = argparse.ArgumentParser(description="Compare simulation cases side by side (headless).")
     parser.add_argument("--preset", choices=sorted(PRESETS), default="boundaries")
-    parser.add_argument("--steps", type=int, default=560)
-    parser.add_argument("--frame-interval", type=int, default=2)
-    parser.add_argument("--fps", type=int, default=20)
+    parser.add_argument("--steps", type=_positive_int, default=560)
+    parser.add_argument("--frame-interval", type=_positive_int, default=2)
+    parser.add_argument("--fps", type=_positive_int, default=20)
     parser.add_argument("--out", type=Path, default=Path("feedback/compare"), help="output path; suffix is chosen automatically")
     args = parser.parse_args(argv)
 
