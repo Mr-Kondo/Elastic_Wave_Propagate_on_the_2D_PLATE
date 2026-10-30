@@ -124,11 +124,34 @@ class CompareTests(unittest.TestCase):
         self.assertAlmostEqual(extents[1][1], 20 * 0.2)
 
     def test_custom_cases_replace_preset(self):
+        import numpy as np
+
+        ran = []
+
+        def fake_run_case(config, steps, frame_interval):
+            ran.append(config)
+            return np.zeros((1, config.ny, config.nx))
+
+        captured = {}
+
+        def fake_render(cases, configs, *args):
+            captured["names"] = list(cases)
+            return Path("unused.mp4")
+
+        with (
+            unittest.mock.patch("compare.run_case", fake_run_case),
+            unittest.mock.patch("compare.render", fake_render),
+        ):
+            main(["--preset", "poisson", "--steps", "4", "--case", "a:poisson_ratio=0.3", "--case", "b:boundary_type=fixed"])
+        self.assertEqual(captured["names"], ["a", "b"])
+        self.assertEqual([c.poisson_ratio for c in ran], [0.3, SimulationConfig().poisson_ratio])
+        self.assertEqual(ran[1].boundary_type, "fixed")
+
+    def test_math_like_case_name_renders_literally(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            out = main(["--steps", "4", "--case", "a:poisson_ratio=0.3", "--case", "b:boundary_type=fixed",
-                        "--out", str(Path(tmp) / "c")])
+            out = main(["--steps", "2", "--case", r"$\notacommand$:poisson_ratio=0.3", "--out", str(Path(tmp) / "c")])
             self.assertGreater(out.stat().st_size, 0)
 
     def test_rejects_non_positive_arguments(self):
