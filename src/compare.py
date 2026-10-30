@@ -79,7 +79,7 @@ def render(cases: dict, configs: dict, steps: int, frame_interval: int, fps: int
         config = configs[name]  # each case may have its own grid
         extent = (0, (config.nx - 1) * config.dx, 0, (config.ny - 1) * config.dy)
         images.append(ax.imshow(cases[name][0], origin="lower", extent=extent, vmin=0, vmax=vmax, cmap="viridis"))
-        ax.set_title(name, fontsize=10)
+        ax.set_title(name, fontsize=10, parse_math=False)  # case names are user text, not math
         ax.set_ylabel("y (m)")
     axes[-1, 0].set_xlabel("x (m)")
     fig.colorbar(images[0], ax=axes[:, 0].tolist(), label="|u| (m)")
